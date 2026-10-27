@@ -193,8 +193,9 @@ html.playing{overflow:hidden}
 .pl-panel.me .pl-bubble{border-top-right-radius:0;background:color-mix(in srgb,var(--me-bg) 76%,transparent);color:var(--me-talk)}
 .pl-panel.info{max-width:min(860px,calc(100vw - 32px))}
 .pl-panel.info .pl-bubble{background:rgba(19,18,23,.76);color:#d6d5da;box-shadow:inset 0 0 0 1px #4a4950}
+/* 本文の箱（.pl-text）には position を付けない。HTML-in-Canvas（Chrome 156）では、overflow:hidden の箱の中の position:relative の要素が
+   canvas に写す像に描かれず、吹き出しが空になった（一度スタイルが変わると描かれるので、一時停止で直るように見えた）。2026-10-28 */
 .pl-scroll{max-height:min(40vh,17em);overflow:hidden}
-.pl-text{position:relative}
 .pl-text>*{margin:0}
 .pl-text>*+*{margin-top:.9em}
 .pl-text i{color:var(--them-act)}
@@ -1683,7 +1684,7 @@ function step(dt) {
   }
   revealed = false;
   const at = reveal(Math.floor(play.typed));
-  if (revealed) touch(play.nar ? layers.nar : layers.panel, play.nar ? $('plNarList').lastElementChild : $('plText'));
+  if (revealed) touch(play.nar ? layers.nar : layers.panel);
   if (play.nar) {
     // 地の文: いま出しているところが列の 6 割の高さに来るように、列ごと上へ流す
     const list = $('plNarList'), cur = list.lastElementChild;
@@ -1695,10 +1696,10 @@ function step(dt) {
     if (list.style.transform !== tf) { list.style.transform = tf; touch(layers.nar); }
     return;
   }
-  // 吹き出し: 出したところが下に隠れないように、本文を送る
+  // 吹き出し: 出したところが下に隠れないように、本文を送る（本文の箱は position を持たないので、本文の上の端からの位置にする）
   const sc = $('plScroll'), max = sc.scrollHeight - sc.clientHeight;
   if (max > 0) {
-    const want = at ? Math.min(max, Math.max(0, at.offsetTop + play.lineH * 1.5 - sc.clientHeight)) : max;
+    const want = at ? Math.min(max, Math.max(0, at.offsetTop - $('plText').offsetTop + play.lineH * 1.5 - sc.clientHeight)) : max;
     play.scroll += (want - play.scroll) * ease(8);
     if (Math.abs(sc.scrollTop - play.scroll) >= 1) { sc.scrollTop = play.scroll; touch(layers.panel); }
   }
@@ -2401,14 +2402,11 @@ function initGL() {
   return true;
 }
 
-// HTML-in-Canvas: 部品の中の文字だけを書き換えても、paint の changedElements に入らず写し直されないことがある
-// （Chrome 156 で、文字送り中の吹き出しが空のままになった。2026-10-27）。書き換えた部品は次の paint で必ず写し直し、
-// 文字を書き換えたときは中の要素の透明度を見えない程度に揺らして、ブラウザにも描き直させる
-let nudgeFlip = false;
-function touch(L, inner) {
+// HTML-in-Canvas: 書き換えた部品は、paint の changedElements を待たずに次の paint で必ず写し直す（念のため）。
+// Chrome 156 では中の文字だけの書き換えも changedElements に入る（2026-10-28 に確認。前の日の「吹き出しが空」は .pl-text の position が原因だった）
+function touch(L) {
   if (!hic) return;
   L.force = true;
-  if (inner) inner.style.opacity = (nudgeFlip = !nudgeFlip) ? '.999' : '';
 }
 const touchAll = () => { for (const L of allLayers()) touch(L); };
 
@@ -2418,7 +2416,7 @@ function showMode() {
   $('hmSupport').textContent = !gl ? 'このブラウザでは WebGL2 が使えないため、再生モードは使えません。ビューアは使えます。'
     : hic ? 'このブラウザでは HTML-in-Canvas が使えます。吹き出しや大きな文字にも効果がかかり、録画は canvas からそのまま撮ります。'
     : 'このブラウザでは HTML-in-Canvas が使えないため、文字は canvas の上に重ねて表示します。録画は画面の共有で撮ります（許可を聞かれます）。Chrome では chrome://flags/#canvas-draw-element を有効にすると HTML-in-Canvas が使えます。';
-  touch(hpart('nav'), $('hmMode'));
+  touch(hpart('nav'));
 }
 // HTML-in-Canvas で描けなかったら（API が変わった・paint が来ないなど）、部品を canvas から出して重ねる方式に切り替える
 function fallbackOverlay(why) {
@@ -2956,7 +2954,7 @@ function stepHome(now) {
   const big = A.countT && $('hmCur').querySelector('.hm-big');
   if (big) {
     const k = s ? 1 : (now - A.countT) / 1100, txt = Math.round(A.countN * ease(k)).toLocaleString();
-    if (big.textContent !== txt) { big.textContent = txt; touch(hpart('cur'), big); }
+    if (big.textContent !== txt) { big.textContent = txt; touch(hpart('cur')); }
     if (k >= 1) A.countT = 0;
   }
   if (A.barsT) {
@@ -2985,7 +2983,7 @@ function stepHome(now) {
     const cur = A.lines[A.li % A.lines.length];
     $('hmChipName').textContent = cur.name;
     $('hmChipText').textContent = cur.chars.slice(0, A.typed).join('');
-    touch(layers.chip, $('hmChipText'));
+    touch(layers.chip);
   }
 }
 // トップを出したとき・ページを替えたときの出方。重ねる方式は CSS（.home.in）、HTML-in-Canvas は部品ごとの t0 から溶かして出す
@@ -3047,7 +3045,7 @@ function homeSec(sec) {
   play.pulse = 1;
   hpart('head').t0 = still() ? 0 : performance.now();  // 見出しも溶かして出し直す
   touch(layers.deco);
-  touch(hpart('head'), $('hmHTitle'));
+  touch(hpart('head'));
   touch(hpart('nav'));
 }
 // トップの差し色: ページの色。概要は主役の立ち絵から取った色（無ければページの色）
@@ -3168,7 +3166,7 @@ function tickHome() {
   const two = n => String(n).padStart(2, '0'), wd = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][d.getDay()];
   $('hmClock').innerHTML = `${two(d.getMonth() + 1)}.${two(d.getDate())}<em>${wd}</em>`
     + `<small>${d.getFullYear()} · ${two(d.getHours())}:${two(d.getMinutes())}:${two(s)}</small>`;
-  touch(hpart('date'), $('hmClock').lastElementChild);
+  touch(hpart('date'));
 }
 // 目次と左下のボタンは HTML-in-Canvas のとき canvas の中にあるので、#play で受ける
 $('play').addEventListener('click', e => {
