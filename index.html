@@ -1,0 +1,3304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Talklog Viewer</title>
+<!-- トップと再生の表示に使うフォント（つながっていなければ端末のフォント）。
+     Overused Grotesk: RandomMaerks、SIL Open Font License 1.1（https://github.com/RandomMaerks/Overused-Grotesk）。英字の見出し・数字に使う
+     Zen Kaku Gothic New: Google Fonts（SIL Open Font License 1.1）。トップの日本語に使う -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- フォントの CSS は表示を止めないよう、読み込めてから効かせる（つながらないときに、画面が出るまで待たされないように） -->
+<link rel="stylesheet" id="zkCss" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700;900&display=swap" media="print" onload="this.media='all'">
+<script>
+// 読み込み中の表示の配色をトップの配色に合わせる（ちらつかないよう、本文より前に）。#viewer で開いたときは出さない
+try { document.documentElement.dataset.hboot = localStorage.getItem('tlv.homeTheme') === 'dark' ? 'dark' : 'light'; } catch {}
+if (/^#viewer\b/.test(location.hash)) document.documentElement.dataset.boot = 'off';
+</script>
+<style>
+@font-face{font-family:"Overused Grotesk";src:url("https://cdn.jsdelivr.net/gh/RandomMaerks/Overused-Grotesk@749aa2c96c43a4af2d6932607ed42a5709982c5f/fonts/variable/OverusedGrotesk-VF.woff2") format("woff2");font-weight:200 900;font-display:swap}
+:root{
+  --bg:#151517; --bar:rgba(21,21,23,.86); --line:#2a292e; --btn:#242328; --btn-hover:#2f2e35; --text:#e8e7ea;
+  --them-name:#b9b9b9;
+  --nar:#adacaf; --nar-icon:#b5b5b7; --muted:#7d7c82; --accent:#7b66f0; --select:#5d31e0;
+  --av:40px; --gap:10px; --head:56px; --log-fs:15px; --scale:1;
+}
+/* 吹き出しのテーマ（zeta と同じ 3 種類、zeta のスクショから測った色）。[data-tp] は表示設定の見本用 */
+:root,[data-tp="basic"]{--them-bg:#232325;--them-talk:#fff;--them-act:#b1b0b3;--me-bg:#644ed7;--me-talk:#fff;--me-act:#cbbdff;--me-name:#7b71b9}
+html[data-theme="oreo"],[data-tp="oreo"]{--them-bg:#fff;--them-talk:#000;--them-act:#828282;--me-bg:#3e3e41;--me-talk:#fff;--me-act:#c5c5c6;--me-name:#b9b9b9}
+html[data-theme="taro"],[data-tp="taro"]{--them-bg:#fff;--them-talk:#000;--them-act:#4f4f4f;--me-bg:#ded6ff;--me-talk:#000;--me-act:#6f6b80;--me-name:#7b71b9}
+html[data-fs="xs"]{--scale:.8}
+html[data-fs="s"]{--scale:.9}
+html[data-fs="l"]{--scale:1.2}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.75 "Pretendard","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+[hidden]{display:none!important}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:rgba(128,128,128,.2);padding:.05em .35em;border-radius:4px}
+
+/* ヘッダー */
+.bar{position:sticky;top:0;z-index:10;background:var(--bar);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.bar-in{max-width:760px;height:var(--head);margin:0 auto;padding:0 14px;display:flex;align-items:center;gap:12px}
+.ttl{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
+#title{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pos{display:flex;align-items:center;gap:4px;font-size:12.5px;color:var(--muted);white-space:nowrap}
+.pos input{width:5.2em;padding:3px 6px;border:1px solid var(--line);border-radius:8px;background:var(--btn);text-align:right;font-size:12.5px;-moz-appearance:textfield}
+.pos input::-webkit-inner-spin-button{display:none}
+.tools{display:flex;gap:6px}
+.btn{padding:6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--btn);font-size:13px;line-height:1.4;white-space:nowrap}
+.btn:hover{background:var(--btn-hover)}
+.btn.big{padding:9px 20px;font-size:14px}
+.btn.primary{background:var(--accent);border-color:transparent;color:#fff}
+.btn.primary:hover{background:#8a78f3}
+
+/* トーク */
+.log{max-width:760px;margin:0 auto;padding:22px 14px 140px;font-size:calc(var(--log-fs) * var(--scale))}
+.msg{display:grid;grid-template-columns:var(--av) minmax(0,1fr);column-gap:var(--gap);margin:0 0 28px;scroll-margin-top:calc(var(--head) + 14px);content-visibility:auto;contain-intrinsic-size:auto 150px}
+.col{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
+.msg.me{grid-template-columns:minmax(0,1fr) var(--av)}
+.msg.me .av{grid-column:2;grid-row:1}
+.msg.me .col{grid-column:1;grid-row:1;align-items:flex-end}
+.av{width:var(--av);height:var(--av);border-radius:50%;background:#3a3940 center/cover no-repeat;display:grid;place-items:center;font-size:15px;font-weight:700;color:#fff;cursor:pointer;user-select:none}
+.nm{font-size:.84em;line-height:1.4;color:var(--them-name);margin:2px 2px 7px}
+.me .nm{color:var(--me-name)}
+.bb{max-width:88%;padding:13px 16px;border-radius:16px;background:var(--them-bg);color:var(--them-talk);overflow-wrap:anywhere}
+.them .bb{border-top-left-radius:0}
+.me .bb{border-top-right-radius:0}
+.bb i{color:var(--them-act)}
+.me .bb{background:var(--me-bg);color:var(--me-talk)}
+.me .bb i{color:var(--me-act)}
+.bb b{font-weight:700}
+.bb>*,.tx>*{margin:0}
+.bb>*+*,.tx>*+*{margin-top:.95em}
+.bb ol,.bb ul,.tx ol,.tx ul{padding-left:1.7em}
+.bb hr,.tx hr{border:0;border-top:1px solid currentColor;opacity:.2}
+.msg.nar .ic{justify-self:center;width:.82em;height:.68em;margin-top:calc((1.75em - .68em) / 2);color:var(--nar-icon)}
+.msg.nar .tx{color:var(--nar)}
+.msg.info{grid-template-columns:minmax(0,1fr)}
+.msg.info .col{align-items:stretch}
+.msg.info .nm{color:var(--accent)}
+.msg.info .bb{max-width:none;background:transparent;border:1px dashed #3b3a42;border-radius:16px;color:var(--nar);font-size:.9em}
+.msg.info .bb i{color:inherit}
+
+/* 未読み込み時 */
+.empty{max-width:760px;margin:0 auto;padding:12vh 16px}
+.drop-card{border:2px dashed #3b3a42;border-radius:20px;padding:44px 28px;text-align:center;color:var(--nar)}
+.drop-card .big{font-size:19px;font-weight:700;color:var(--text);margin-bottom:6px}
+.drop-card p{margin:8px 0;font-size:13.5px}
+.picks{display:flex;flex-direction:column;align-items:center;gap:10px;margin:18px 0 10px}
+.picks-row{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.drop-card .hint{font-size:12.5px;color:var(--muted)}
+.err{color:#ff8a9a!important}
+.drop-mask{position:fixed;inset:0;z-index:60;display:none;place-items:center;background:rgba(100,78,215,.18);border:3px dashed var(--accent);font-size:20px;font-weight:700;pointer-events:none}
+body.dragging .drop-mask{display:grid}
+
+/* 右下ボタン・通知 */
+.fab{position:fixed;right:max(16px,calc(50vw - 420px));bottom:22px;z-index:9;display:flex;flex-direction:column;gap:8px;transition:opacity .25s}
+.fab button{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--btn);font-size:17px;line-height:1;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.fab button:hover{background:var(--btn-hover)}
+.fab.idle:not(:has(:focus-visible)){opacity:0;pointer-events:none}
+.toast{position:fixed;left:50%;bottom:26px;z-index:50;transform:translateX(-50%);max-width:calc(100vw - 32px);padding:9px 16px;border-radius:12px;background:#2c2b31;border:1px solid #3b3a42;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.4);transition:opacity .3s}
+.toast.out{opacity:0}
+
+/* ダイアログ共通・登場人物 */
+dialog{width:min(480px,calc(100vw - 32px));max-height:min(640px,calc(100vh - 48px));padding:0;border:1px solid var(--line);border-radius:18px;background:#1c1b1f;color:var(--text)}
+dialog::backdrop{background:rgba(0,0,0,.55)}
+.dlg-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 6px}
+.dlg-head h2{margin:0;font-size:16px}
+.dlg-head button{width:32px;height:32px;border:0;border-radius:50%;background:transparent;font-size:16px}
+.dlg-head button:hover{background:var(--btn)}
+.cast-note{margin:0 16px 10px;font-size:12px;color:var(--muted)}
+#castList{list-style:none;margin:0;padding:0 8px 12px}
+#castList li{display:flex;align-items:center;gap:10px;padding:8px;border-radius:12px}
+#castList li.hl{background:#26252b}
+#castList .cn{flex:1;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#castList .cc{font-size:11.5px;color:var(--muted);margin-left:6px}
+#castList .btn{padding:4px 10px;font-size:12px}
+#castList .pic{flex:none;width:30px;height:40px;border:1px dashed #3b3a42;border-radius:6px;background:center/cover no-repeat}
+#castList .pic[style]{border:0}
+#castList .pic.inh{opacity:.45}
+.cast-btns{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px}
+
+/* ログを開く（フォルダ内のログの一覧） */
+.lib-acts{display:flex;gap:8px;padding:2px 16px 12px}
+#libList{list-style:none;margin:0;padding:0 8px 12px}
+#libList button{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 10px;border:0;border-radius:12px;background:transparent;text-align:left;line-height:1.45}
+#libList button:hover{background:var(--btn)}
+#libList button.cur{background:#26252b}
+#libList .ln{max-width:100%;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#libList .ls{font-size:11.5px;color:var(--muted)}
+#libList .ls em{font-style:normal;color:#8f80ea}
+
+/* 表示設定（画面下に出すシート。後ろの見た目の変化が見えるよう背景は薄め） */
+#prefs{margin:auto auto 16px;background:#212123}
+#prefs::backdrop{background:rgba(0,0,0,.25)}
+.sheet-sec{padding:6px 16px 18px}
+.sheet-sec h3{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--muted)}
+.themes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.tcard{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:0;padding:0;border:0;background:transparent;color:#949496;font-size:13px}
+.tcard[aria-checked="true"]{color:#8f80ea}
+.tc-box{position:relative;width:100%;display:flex;flex-direction:column;gap:6px;padding:28px 9px 18px;border:2px solid transparent;border-radius:12px;background:var(--bg)}
+.tcard:hover .tc-box{border-color:#3b3a42}
+.tcard[aria-checked="true"] .tc-box{border-color:var(--select)}
+.tc-them,.tc-me{padding:4px 9px;border-radius:12px;font-size:12px;line-height:1.5;white-space:nowrap}
+.tc-them{align-self:flex-start;background:var(--them-bg);color:var(--them-talk);border-top-left-radius:0}
+.tc-me{align-self:flex-end;background:var(--me-bg);color:var(--me-talk);border-top-right-radius:0}
+.tc-check{position:absolute;top:6px;left:6px;width:18px;height:18px;border-radius:50%;background:var(--select);display:none;place-items:center}
+.tcard[aria-checked="true"] .tc-check{display:grid}
+.fs{display:flex;padding:3px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.fs button{flex:1;padding:6px 0;border:0;border-radius:9px;background:transparent;color:var(--muted);font-size:14px;line-height:1.4}
+.fs button:hover{color:var(--text)}
+.fs button[aria-checked="true"]{background:var(--accent);color:#fff}
+
+/* 再生（立ち絵つきで 1 件ずつ流す）。.pl-ui の中身は、HTML-in-Canvas が使えるときは canvas の中へ移して描く */
+html.playing{overflow:hidden}
+.play{position:fixed;inset:0;z-index:40;overflow:hidden;background:#0b0b0d;color:#fff;font-size:calc(17px * var(--scale));user-select:none;-webkit-user-select:none;--pl-c:#644ed7;--pl-ink:#fff;--hud-font:"Overused Grotesk","Bahnschrift",system-ui,sans-serif}
+#stage{position:absolute;inset:0;display:block;width:100%;height:100%}
+.pl-ui{position:absolute;inset:0;pointer-events:none}
+.pl-ui>*{position:absolute;left:0;top:0}
+#stage>*{position:absolute;left:0;top:0}  /* HTML-in-Canvas で canvas に移した部品（当たり判定は描いた位置に合わせる） */
+.pl-hud{width:calc(100vw - 48px);color:#e8e7ea;font-family:var(--hud-font)}
+.pl-hud-row{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+.pl-lbl{font-size:10px;line-height:1.5;letter-spacing:.2em;color:#8d8c93}
+.pl-lbl b{color:var(--pl-c)}
+.pl-count{display:flex;align-items:baseline;gap:6px;line-height:1;font-variant-numeric:tabular-nums}
+.pl-count b{font-size:26px;font-weight:600;letter-spacing:.02em}
+.pl-count span{font-size:12px;color:#8d8c93}
+.pl-count em{margin-left:6px;font-size:11px;font-style:normal;letter-spacing:.25em;color:var(--pl-c)}
+.pl-title{max-width:42vw;margin-top:4px;font:600 12px/1.4 "Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;color:#cfcdd4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pl-hud-r{text-align:right}
+.pl-date{font-size:18px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.pl-bar{height:2px;margin-top:10px;background:rgba(255,255,255,.1)}
+.pl-bar i{display:block;width:0;height:100%;background:var(--pl-c)}
+.pl-name{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:max-content}
+.pl-name.r{align-items:flex-end}
+.pl-name-sub{font:600 12px/1 var(--hud-font);letter-spacing:.45em;color:var(--pl-c)}
+.pl-name-big{font-size:clamp(44px,6.5vw,112px);font-weight:900;line-height:1.05;letter-spacing:.06em;white-space:nowrap;color:rgba(255,255,255,.07);-webkit-text-stroke:1.5px rgba(255,255,255,.55)}
+.pl-name-big small{margin-left:.3em;font-size:.3em;letter-spacing:.1em;vertical-align:middle;color:#cfcdd4;-webkit-text-stroke:0}
+/* 発言の吹き出し: 色はビューアの吹き出しのテーマと同じ。しっぽ側（話している人の側の上）の角だけ角ばらせる */
+.pl-panel{width:max-content;min-width:min(240px,calc(100vw - 32px));max-width:min(820px,62vw);line-height:1.85}
+.pl-head{display:flex;align-items:center;gap:10px;margin:0 4px 7px;font-size:.78em;line-height:1.4}
+.pl-panel.me .pl-head{flex-direction:row-reverse}
+.pl-tag{padding:3px 12px;border-radius:999px;background:var(--pl-c);color:var(--pl-ink);font-weight:700;letter-spacing:.04em}
+.pl-no{font-family:var(--hud-font);letter-spacing:.14em;color:#8d8c93;font-variant-numeric:tabular-nums}
+.pl-bubble{position:relative;padding:14px 22px 18px;border-radius:20px;background:color-mix(in srgb,var(--them-bg) 76%,transparent);color:var(--them-talk);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--pl-c) 32%,transparent)}
+.pl-panel.them .pl-bubble{border-top-left-radius:0}
+.pl-panel.me .pl-bubble{border-top-right-radius:0;background:color-mix(in srgb,var(--me-bg) 76%,transparent);color:var(--me-talk)}
+.pl-panel.info{max-width:min(860px,calc(100vw - 32px))}
+.pl-panel.info .pl-bubble{background:rgba(19,18,23,.76);color:#d6d5da;box-shadow:inset 0 0 0 1px #4a4950}
+.pl-scroll{max-height:min(40vh,17em);overflow:hidden}
+.pl-text{position:relative}
+.pl-text>*{margin:0}
+.pl-text>*+*{margin-top:.9em}
+.pl-text i{color:var(--them-act)}
+.pl-panel.me .pl-text i{color:var(--me-act)}
+.pl-panel.info .pl-text i{color:inherit}
+.pl-text ol,.pl-text ul,.pl-np ol,.pl-np ul{padding-left:1.7em}
+.pl-text hr,.pl-np hr{border:0;border-top:1px solid currentColor;opacity:.2}
+.pl-text .rest,.pl-np .rest{visibility:hidden}
+.pl-panel.all .pl-text .rest,.pl-nar.all .pl-np .rest{visibility:visible}
+.pl-next{position:absolute;right:14px;bottom:4px;font-size:11px;color:var(--pl-c);opacity:0}
+/* 地の文: 画面の中央の列に積み、上下の端は消えるようにぼかす */
+.pl-nar{width:min(720px,calc(100vw - 40px));height:64vh}
+.pl-nar-mask{height:100%;overflow:hidden;-webkit-mask-image:linear-gradient(transparent,#000 24%,#000 78%,transparent);mask-image:linear-gradient(transparent,#000 24%,#000 78%,transparent)}
+.pl-nar-list{position:relative;padding:32vh 0;color:#e6e5ea;font-size:1.04em;line-height:2;text-shadow:0 1px 10px rgba(0,0,0,.9),0 0 2px rgba(0,0,0,.8)}
+.pl-np{margin-bottom:1.6em}
+.pl-np>*{margin:0}
+.pl-np>*+*{margin-top:.7em}
+.pl-np i{color:#c4c3c9}
+.pl-panel.done .pl-next{animation:plBlink 1.1s linear infinite}
+@keyframes plBlink{0%,55%{opacity:1}56%,100%{opacity:0}}
+.pl-ctrl{position:absolute;left:50%;bottom:18px;z-index:1;display:flex;align-items:center;gap:2px;padding:5px;border:1px solid var(--line);border-radius:999px;background:rgba(28,27,31,.84);transform:translateX(-50%);transition:opacity .3s}
+.pl-ctrl button{display:grid;place-items:center;min-width:38px;height:38px;padding:0 10px;border:0;border-radius:999px;background:transparent;font-size:13px;line-height:1;white-space:nowrap}
+.pl-ctrl button:hover{background:var(--btn-hover)}
+.pl-ctrl svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.pl-ctrl .sep{width:1px;height:20px;margin:0 4px;background:var(--line)}
+.pl-scene{max-width:40vw;margin-left:auto;color:#b4b3ba;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.play.idle{cursor:none}
+/* 再生の表示のフォント（吹き出し・地の文・大きな名前）。表示設定で Google Fonts から選ぶ */
+.pl-panel,.pl-nar-list,.pl-name-big{font-family:var(--pl-font,inherit)}
+/* 明るい表示（参考動画寄り: 白い大理石に墨色の文字）。吹き出しはキャラが白・自分が墨色 */
+.play[data-theme="light"]{background:#e9ecec;color:#16161a;--them-bg:#fff;--them-talk:#141416;--them-act:#68686e;--me-bg:#1f1f24;--me-talk:#fff;--me-act:#c9c9cc}
+.play[data-theme="light"] .pl-hud{color:#16161a}
+.play[data-theme="light"] .pl-lbl,.play[data-theme="light"] .pl-count span,.play[data-theme="light"] .pl-no{color:#68686f}
+.play[data-theme="light"] .pl-title{color:#33333a}
+.play[data-theme="light"] .pl-scene{color:#55555c}
+.play[data-theme="light"] .pl-bar{background:rgba(0,0,0,.12)}
+.play[data-theme="light"] .pl-name-big{color:rgba(0,0,0,.05);-webkit-text-stroke-color:rgba(0,0,0,.55)}
+.play[data-theme="light"] .pl-name-big small{color:#44444a}
+.play[data-theme="light"] .pl-nar-list{color:#1c1c20;text-shadow:0 1px 10px rgba(255,255,255,.95),0 0 2px rgba(255,255,255,.9)}
+.play[data-theme="light"] .pl-np i{color:#55555c}
+.play[data-theme="light"] .pl-panel.info .pl-bubble{background:rgba(255,255,255,.76);color:#2a2a30;box-shadow:inset 0 0 0 1px #b9b9c0}
+.play[data-theme="light"] .pl-ctrl{background:rgba(255,255,255,.84);border-color:rgba(0,0,0,.12);color:#16161a}
+.play[data-theme="light"] .pl-ctrl button:hover{background:rgba(0,0,0,.06)}
+.play[data-theme="light"] .pl-ctrl .sep{background:rgba(0,0,0,.15)}
+/* 再生の表示設定（配色・フォント） */
+#plPrefs{width:min(520px,calc(100vw - 32px))}
+.pp-note{margin:0 0 8px}
+.pp-fonts{list-style:none;margin:0;padding:0;max-height:min(46vh,420px);overflow:auto}
+.pp-fonts button{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 10px;border:1px solid transparent;border-radius:12px;background:transparent;text-align:left}
+.pp-fonts button:hover{background:var(--btn)}
+.pp-fonts button[aria-checked="true"]{border-color:var(--select);background:#26252b}
+.pp-fonts .pp-name{font-size:11.5px;color:var(--muted)}
+.pp-fonts .pp-sample{font-size:17px;line-height:1.6}
+/* 録画中の印（canvas の外の HTML なので、canvas の録画には写らない） */
+.pl-rec{position:absolute;top:14px;left:50%;z-index:3;padding:3px 12px;border-radius:999px;background:rgba(200,30,50,.88);color:#fff;font:600 12px/1.6 var(--hud-font);letter-spacing:.15em;transform:translateX(-50%);pointer-events:none}
+#plRecBtn{color:#ff6b7d}
+#plRecBtn.on{background:rgba(200,30,50,.9);color:#fff}
+
+/* 起動したときの読み込み中の表示（トップが描けるまで）。吹き出しの中で 3 つの点が順に跳ねる */
+.boot{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#e9ecec;color:#16161a;transition:opacity .45s,visibility .45s}
+html[data-hboot="dark"] .boot{background:#0b0b0d;color:#ececf0}
+html[data-boot="off"] .boot{display:none}
+.boot.out{opacity:0;visibility:hidden}
+.boot-bub{display:flex;gap:8px;padding:15px 20px;border-radius:4px 22px 22px 22px;background:currentColor}
+.boot-bub i{width:9px;height:9px;border-radius:50%;background:#7b66f0;animation:bootDot 1.1s ease-in-out infinite}
+.boot-bub i:nth-child(2){animation-delay:.15s}
+.boot-bub i:nth-child(3){animation-delay:.3s}
+@keyframes bootDot{0%,60%,100%{transform:none;opacity:.4}30%{transform:translateY(-5px);opacity:1}}
+.boot b{font:800 15px/1 "Overused Grotesk","Bahnschrift",system-ui,sans-serif;letter-spacing:.2em}
+.boot b em{font-style:normal;opacity:.5}
+.boot span{font-size:12px;letter-spacing:.06em;opacity:.6}
+@media (prefers-reduced-motion:reduce){.boot-bub i{animation:none;opacity:.8}}
+
+/* トップ（概要・使い方・ビューア・再生モード・更新履歴）。左に目次（ページごとの色の札を並べたドック）、中央に見出しと紋章とページ、右に小さなパネル。
+   形は zeta の吹き出しと同じく「しっぽ側の角だけ角ばらせた角丸」でそろえる（紋章の枠・目次の札・パネル・ボタン）。
+   紋章はどのページにも出す: 吹き出しの枠に番号・大きな漢字・英語（概要は主役の立ち絵と名前）。枠と背景と大きな文字（#hmDeco）は canvas に描き、
+   押したり選んだりする部分（.home）は上に重ねた HTML。色はページごとの差し色（--h-acc。JS が入れる）。配色はトップだけ別に選べる（既定はライト） */
+.play[data-view="home"] .pl-ctrl,.play[data-view="home"] .pl-rec{display:none}
+.play[data-view="home"].idle{cursor:auto}
+/* 色の変数は #play に置く（HTML-in-Canvas のときトップの部品は .home の外＝canvas の中に移るため） */
+.play{--h-ink:#16161a;--h-sub:#5f5f68;--h-panel:rgba(255,255,255,.8);--h-line:rgba(20,20,26,.14);--h-soft:rgba(20,20,26,.07);--h-bub:#fff;
+  --h-acc:#7b66f0;--h-acc-ink:#fff;--h-acc-t:color-mix(in srgb,var(--h-acc) 72%,#000);
+  --h-font:"Overused Grotesk","Zen Kaku Gothic New","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif}
+.play[data-hlook="dark"]{--h-ink:#ececf0;--h-sub:#9d9ca4;--h-panel:rgba(18,17,22,.78);--h-line:rgba(255,255,255,.14);--h-soft:rgba(255,255,255,.08);--h-bub:#232325;
+  --h-acc-t:color-mix(in srgb,var(--h-acc) 78%,#fff)}
+/* .home は押せる所（中央のページ・置き場所の中身）だけ押せるようにし、ほかは下の canvas（目次など）へ通す */
+.home{position:absolute;inset:0;z-index:2;display:grid;grid-template-columns:clamp(200px,17vw,260px) minmax(0,1fr) clamp(240px,22vw,330px);gap:22px;padding:20px 22px;
+  color:var(--h-ink);font:14px/1.6 var(--h-font);user-select:text;-webkit-user-select:text;pointer-events:none}
+.home .hm-main,.home .hm-slot>*{pointer-events:auto}
+.hm-part{box-sizing:border-box;color:var(--h-ink);font:14px/1.6 var(--h-font)}
+.hm-slot>.hm-part{width:100%}
+.hm-slot[data-slot="nav"]{min-height:0}
+.hm-slot[data-slot="nav"]>.hm-nav{height:100%}
+#stage .hm-panel{-webkit-backdrop-filter:none;backdrop-filter:none}  /* canvas の中ではぼかす下地が無いので */
+/* 重ねる方式のときの出方（空 → ぼかしを解きながら少し浮き上がる。--d で順番に）。HTML-in-Canvas のときはシェーダーで溶かして出す */
+.home .hm-part{opacity:0;transform:translateY(10px);filter:blur(4px);transition:opacity .75s cubic-bezier(.33,1,.68,1) var(--d,0s),transform 1.05s cubic-bezier(.16,1,.3,1) var(--d,0s),filter .75s cubic-bezier(.33,1,.68,1) var(--d,0s)}
+.home.in .hm-part{opacity:1;transform:none;filter:none}
+@media (prefers-reduced-motion:reduce){.home .hm-part{transition:none;opacity:1;transform:none;filter:none}}
+/* ライト・ダークの切り替え（☀ ☾ を並べ、いまの方を濃く）とフォントのボタン。トップと再生で同じ形 */
+.tg{display:inline-flex!important;align-items:center;gap:2px;padding:3px!important}
+.tg svg{box-sizing:content-box;width:15px;height:15px;padding:4px;border-radius:999px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;opacity:.4}
+.tg .i-moon{fill:currentColor;stroke:none}
+.tg[data-on="light"] .i-sun,.tg[data-on="dark"] .i-moon{opacity:1;background:rgba(127,127,127,.28)}
+.tf{font-family:var(--hud-font)!important;font-weight:700!important;letter-spacing:.02em}
+.hm-tools{display:flex;gap:8px}
+.hm-tools button{height:34px;padding:0 12px;border:1px solid var(--h-line);border-radius:4px 17px 17px 17px;background:var(--h-panel);color:var(--h-ink);font-size:13px}
+.hm-tools button:hover{background:var(--h-soft)}
+/* 概要の紋章のそばの吹き出し（続きの発言を 1 字ずつ打つ） */
+.hm-chip{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:min(270px,70vw);padding:10px 15px 12px;border-radius:3px 18px 18px 18px;background:var(--h-bub);color:var(--h-ink);font:13.5px/1.65 var(--h-font);box-shadow:inset 0 0 0 1px var(--h-line)}
+.hm-chip b{padding:0 8px;border-radius:999px;background:var(--h-acc);color:var(--h-acc-ink);font-size:11px;letter-spacing:.04em}
+.hm-chip span{min-height:3.3em}  /* 2 行分の高さを取っておき、打ち込むあいだ大きさを変えない（写し直しの大きさがそろう） */
+.hm-chip span::after{content:"";display:inline-block;width:.45em;height:1em;margin-left:2px;vertical-align:-2px;background:var(--h-acc)}
+.home[hidden]{display:none}
+.hm-tag{display:inline-block;padding:1px 8px;border-radius:2px 8px 8px 8px;background:var(--h-acc);color:var(--h-acc-ink);font:700 10.5px/1.6 var(--hud-font);letter-spacing:.1em}
+/* 左の目次（ドック）: ページごとの色の札（漢字 1 字）を並べ、選んでいるページの札を塗る。--c は札の色（JS が入れる） */
+.hm-nav{display:flex;flex-direction:column;align-items:stretch;gap:4px;min-height:0}
+.hm-brand{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:2px 2px 12px;border-bottom:1px solid var(--h-line)}
+.hm-logo{flex:none;display:flex;align-items:center;justify-content:center;gap:3px;width:38px;height:30px;border-radius:3px 13px 13px 13px;background:var(--h-ink)}
+.hm-logo i{width:5px;height:5px;border-radius:50%;background:var(--h-acc)}
+.hm-brand b{display:block;font:800 18px/1 var(--hud-font);letter-spacing:.04em}
+.hm-brand small{display:block;margin-top:4px;font:600 10px/1.2 var(--hud-font);letter-spacing:.3em;color:var(--h-sub)}
+.hm-nav>button{--c-t:color-mix(in srgb,var(--c) 72%,#000);display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:12px;padding:6px 10px 6px 6px;border:0;border-radius:4px 18px 18px 18px;background:none;color:var(--h-ink);text-align:left;line-height:1.2}
+.play[data-hlook="dark"] .hm-nav>button{--c-t:color-mix(in srgb,var(--c) 78%,#fff)}
+.hm-nav>button:hover{background:var(--h-soft)}
+.hm-nav>button[aria-current="true"]{background:color-mix(in srgb,var(--c) 15%,transparent)}
+.hm-ico{grid-row:1/3;display:grid;place-items:center;width:42px;height:42px;border:1.5px solid var(--c);border-radius:3px 14px 14px 14px;color:var(--c-t);font:900 20px/1 var(--h-font);font-style:normal}
+.hm-nav>button[aria-current="true"] .hm-ico{background:var(--c);color:var(--c-ink,#fff)}
+.hm-nav>button b{font:700 17px/1.1 var(--hud-font);letter-spacing:.03em}
+.hm-nav>button[aria-current="true"] b{color:var(--c-t)}
+.hm-nav>button span{font-size:11.5px;color:var(--h-sub)}
+.hm-status{display:flex;flex-direction:column;gap:10px;margin-top:auto;padding-top:12px;border-top:1px solid var(--h-line)}
+.hm-online b{display:block;margin-top:5px;font:700 30px/1 var(--hud-font)}
+.hm-online small{display:block;margin-top:4px;font-size:11.5px;color:var(--h-sub)}
+.hm-dl{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:0;font:600 11.5px/1.5 var(--hud-font)}
+.hm-dl dt{letter-spacing:.14em;color:var(--h-sub)}
+.hm-dl dd{margin:0}
+/* 中央: 見出しと紋章（.hm-hero。動かない）の下に、ページの本文（.hm-secs。ここだけスクロール）。
+   見出しと紋章は同じ枠に重ね、紋章は題名の途中から右へ置く（見出しが前）。概要は見出しの下に主役の立ち絵を大きく */
+.hm-main{display:flex;flex-direction:column;min-height:0}
+.hm-hero{flex:none;display:grid;grid-template-columns:minmax(0,1fr);align-items:end;gap:12px 20px;margin-bottom:14px}
+.hm-hero>*{grid-area:1/1}
+.hm-hero.ov>*{grid-area:auto}
+.hm-hero:not(.ov){margin-bottom:26px}  /* 紋章の枠の下の打ち込み中の印（枠の下 36px まで）を本文にかぶせない */
+.hm-hero .hm-slot{z-index:1}
+/* トップの文は文節で折り返す（日本語。<html lang="ja"> が要る）。収まらない長い語だけはその場で折る */
+.home,.hm-part{word-break:auto-phrase;overflow-wrap:break-word;text-wrap:pretty}
+.hm-secs{flex:1;min-height:0;overflow:auto;padding-right:6px}
+.hm-sec{display:none}
+.hm-sec.on{display:block;animation:hmIn .5s cubic-bezier(.2,.7,.2,1)}
+@keyframes hmIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.hm-head{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.hm-head b{font:700 12.5px/1 var(--hud-font);letter-spacing:.24em;color:var(--h-acc-t)}
+.hm-head h2{margin:0;font-size:clamp(30px,3vw,44px);font-weight:900;line-height:1.05;letter-spacing:.02em}
+.hm-head span{padding:2px 10px;border:1px solid var(--h-acc-t);border-radius:2px 9px 9px 9px;color:var(--h-acc-t);font:700 11px/1.4 var(--hud-font);letter-spacing:.24em}
+.hm-lead{max-width:680px;margin:0 0 14px;line-height:1.9}
+/* 紋章を描く場所（中身は空。canvas に描く）。概要は主役の立ち絵を大きく、ほかのページは見出しの後ろ */
+.hm-emblem{justify-self:start;width:clamp(150px,min(20vw,29vh),280px);margin-left:clamp(64px,8vw,130px);aspect-ratio:1.16}
+.hm-hero.ov .hm-emblem{justify-self:stretch;width:100%;height:max(230px,44vh);margin:0;aspect-ratio:auto}
+.hm-panel{margin-bottom:12px;border:1px solid var(--h-line);border-radius:4px 18px 18px 18px;background:var(--h-panel);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.hm-ph{display:flex;align-items:center;gap:8px;margin:0;padding:10px 14px 0;font:700 11.5px/1.4 var(--hud-font);letter-spacing:.2em}
+.hm-ph::before{content:"";flex:none;width:9px;height:9px;border-radius:2px 5px 5px 5px;background:var(--h-acc)}
+.hm-ph em{margin-left:auto;font-style:normal;font-weight:600;font-size:11px;letter-spacing:.06em;color:var(--h-sub)}
+.hm-pb{padding:8px 14px 13px}
+.hm-pb p,.hm-pb li{margin:4px 0;font-size:13.5px;line-height:1.8}
+.hm-pb ul{margin:0;padding-left:1.2em}
+.hm-pb a{color:var(--h-acc-t)}
+.hm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.hm-grid .hm-panel{margin:0}
+.hm-keys{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;align-items:center;font-size:13px}
+.hm-keys kbd{justify-self:start;padding:0 8px;border:1px solid var(--h-line);border-radius:3px 8px 8px 8px;background:var(--h-soft);font:700 12px/1.7 var(--hud-font)}
+.hm-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.hm-speed{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.hm-speed>span{margin-right:4px;font-size:12px;font-weight:700;color:var(--h-sub)}
+.hm-speed button{padding:4px 12px;border:1px solid var(--h-line);border-radius:4px 14px 14px 14px;background:none;color:var(--h-ink);font-size:12px;font-weight:700}
+.hm-speed button:hover{background:var(--h-soft)}
+.hm-speed button[aria-checked="true"]{border-color:var(--h-acc);background:color-mix(in srgb,var(--h-acc) 18%,transparent);color:var(--h-acc-t)}
+.home .btn{padding:6px 15px;border:1px solid var(--h-line);border-radius:4px 16px 16px 16px;background:var(--h-panel);color:var(--h-ink);font-weight:700;font-size:12.5px}
+.home .btn:hover{background:var(--h-soft)}
+.home .btn.primary{border-color:var(--h-acc);background:var(--h-acc);color:var(--h-acc-ink)}
+.home .btn.primary:hover{filter:brightness(1.08)}
+.hm-big{display:block;font:700 34px/1.05 var(--hud-font)}
+.hm-sub{color:var(--h-sub);font-size:12px}
+.hm-hist{list-style:none;margin:0;padding:0}
+.hm-hist>li{display:grid;grid-template-columns:84px minmax(0,1fr);grid-template-rows:auto 1fr;gap:2px 14px;padding:12px 0;border-top:1px solid var(--h-soft)}
+.hm-hist>li:first-child{border-top:0;padding-top:0}
+.hm-hist .v{font:700 26px/1 var(--hud-font);color:var(--h-acc-t)}
+.hm-hist .d{font:600 11px/1.4 var(--hud-font);letter-spacing:.12em;color:var(--h-sub)}
+.hm-hist ul{grid-column:2;grid-row:1/3}
+/* 右の列: 日付と小さなパネル */
+.hm-side{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto}
+.hm-side .hm-panel{margin:0}
+.hm-date{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:flex-end;column-gap:8px;text-align:right;font:700 clamp(28px,2.6vw,40px)/1 var(--hud-font);font-variant-numeric:tabular-nums}
+.hm-date em{font-size:.38em;font-style:normal;letter-spacing:.14em;color:var(--h-acc-t)}
+.hm-date small{flex-basis:100%;margin-top:6px;font-size:11.5px;letter-spacing:.2em;color:var(--h-sub)}
+.hm-bars{list-style:none;margin:0;padding:6px 14px 12px}
+.hm-bars li{display:grid;grid-template-columns:minmax(0,6em) minmax(0,1fr) auto;gap:8px;align-items:center;font-size:12px;line-height:1.9}
+.hm-bars li>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hm-bars i{display:block;height:7px;border-radius:0 4px 4px 0;background:var(--h-soft)}
+.hm-bars i b{display:block;height:100%;border-radius:0 4px 4px 0;background:var(--h-acc)}
+.hm-bars em{font:700 12px/1 var(--hud-font);font-style:normal;font-variant-numeric:tabular-nums}
+/* 続きの発言は小さな吹き出しで（キャラは左・自分は右。地の文は吹き出し無し） */
+.hm-talk{display:flex;flex-direction:column;gap:7px;list-style:none;margin:0;padding:8px 14px 12px}
+.hm-talk li{display:flex;flex-direction:column;align-items:flex-start;gap:2px;font-size:12.5px;line-height:1.6}
+.hm-talk li.me{align-items:flex-end}
+.hm-talk b{font:700 10.5px/1.4 var(--h-font);color:var(--h-sub)}
+.hm-talk span{max-width:94%;padding:5px 10px;border-radius:2px 12px 12px 12px;background:var(--h-soft);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.hm-talk li.me span{border-radius:12px 2px 12px 12px;background:color-mix(in srgb,var(--h-acc) 22%,transparent)}
+.hm-talk li.nar span,.hm-talk li.info span{padding:0 2px;background:none;color:var(--h-sub);font-style:italic}
+.hm-none{margin:0;padding:10px 14px;font-size:12.5px;color:var(--h-sub)}
+.hm-bars li.hm-none,.hm-talk li.hm-none{display:block;padding:2px 0;border:0}
+/* canvas に描く大きな文字。ほかのページは紋章の枠の中に番号・漢字・英語（枠の大きさは JS が --bw・--bh、番号がはみ出す余白を --bm で渡す）。
+   概要は主役の名前を紋章の下の方に重ねて太く */
+.hm-deco{--d-ink:#111;--d-paper:#fff;width:calc(var(--bw,240px) + var(--bm,40px) * 2);height:calc(var(--bh,200px) + var(--bm,40px) * 2);font-weight:900}
+.play[data-hlook="dark"] .hm-deco{--d-ink:#ececf0;--d-paper:#111}
+.hm-deco>span{position:absolute;white-space:nowrap}
+.hm-no{left:0;top:0;font:700 calc(var(--bm,40px) * 1.9)/1 var(--hud-font);letter-spacing:-.02em;color:transparent;-webkit-text-stroke:1.5px var(--h-acc-t)}
+.hm-kanji{left:0;right:0;top:50%;transform:translateY(-52%);text-align:center;font-size:calc(var(--bh,200px) * .6);line-height:1;color:color-mix(in srgb,var(--h-acc) 10%,transparent);-webkit-text-stroke:2px color-mix(in srgb,var(--h-acc-t) 85%,transparent)}
+.hm-en{left:0;right:0;bottom:calc(var(--bm,40px) + var(--bh,200px) * .08);text-align:center;font:700 calc(var(--bh,200px) * .05 + 4px)/1 var(--hud-font);letter-spacing:.5em;text-indent:.5em;color:var(--h-sub)}
+.hm-deco.ov{display:flex;flex-direction:column;align-items:center;gap:6px;width:max-content;height:auto}
+.hm-deco.ov>span{position:static;transform:none}
+.hm-deco.ov .hm-no{display:none}
+.hm-deco.ov .hm-en{order:-1;padding:2px 10px;border-radius:2px 9px 9px 9px;background:var(--h-acc);color:var(--h-acc-ink);font:700 11px/1.5 var(--hud-font);letter-spacing:.24em;text-indent:0}
+.hm-deco.ov .hm-kanji{max-width:46vw;font-size:min(clamp(64px,9vw,170px),max(40px,calc(41vw / var(--kw,4))));line-height:.95;color:var(--d-ink);-webkit-text-stroke:.07em var(--d-paper);paint-order:stroke fill;letter-spacing:.02em;white-space:normal;overflow-wrap:anywhere;text-align:center}  /* 縁取りで、暗い立ち絵の上でも読める */
+@media (max-width:860px){
+  .home{grid-template-columns:minmax(0,1fr);grid-template-rows:none;grid-auto-rows:max-content;gap:14px;padding:14px;overflow:auto}
+  /* 狭い画面の目次は札だけを横に並べる（名前は title と aria-label で） */
+  .hm-nav{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px}
+  .hm-brand{width:100%;margin-bottom:2px;padding-bottom:10px}
+  .hm-nav>button{grid-template-columns:auto;padding:3px;border-radius:4px 15px 15px 15px}
+  .hm-nav>button b,.hm-nav>button span{display:none}
+  .hm-status{flex-direction:row;align-items:center;margin:0 0 0 auto;padding:0;border:0}
+  .hm-online,.hm-dl{display:none}
+  .hm-main,.hm-side,.hm-secs{min-height:auto;overflow:visible}
+  .hm-grid{grid-template-columns:minmax(0,1fr)}
+  .hm-head h2{font-size:28px}
+  .hm-emblem{justify-self:end;width:clamp(120px,32vw,220px);margin:0}  /* 狭い画面で重ねると題名が読めないので、右の端に置く */
+  .hm-hero.ov .hm-emblem{width:100%;height:42vh;margin:0}
+  .hm-deco.ov .hm-kanji{max-width:88vw;font-size:min(clamp(64px,12vw,170px),max(40px,calc(78vw / var(--kw,4))))}
+}
+/* 場面の一覧と手直し */
+#scene{width:min(600px,calc(100vw - 32px))}
+.sc-now{margin:0 16px 8px;font-size:13px}
+.sc-add{display:flex;flex-wrap:wrap;gap:6px;padding:0 16px 12px}
+.sc-add select{padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--btn);font-size:12.5px}
+#scList{list-style:none;margin:0;padding:0 8px 12px}
+#scList li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:7px 8px;border-radius:12px}
+#scList li.cur{background:#26252b}
+#scList li.off{opacity:.45}
+#scList .sc-no{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+#scList .sc-what{font-size:13.5px}
+#scList .sc-src{grid-column:1/3;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#scList .sc-btns{grid-row:1/3;grid-column:3;display:flex;gap:4px}
+#scList .btn{padding:4px 10px;font-size:12px}
+.play.idle .pl-ctrl:not(:focus-within):not(:hover){opacity:0;pointer-events:none}  /* マウスが乗っている間は隠さない（隠れたボタンを押すとクリックが画面に抜けて「送る」になる） */
+
+@media (max-width:540px){
+  :root{--av:34px;--gap:8px;--head:52px;--log-fs:14.5px}
+  .tools{gap:4px}
+  .wide{display:none}
+  .pl-hud .pl-count b{font-size:22px}
+  .pl-date{font-size:15px}
+  .pl-panel{max-width:calc(100vw - 32px)}
+  .pl-bubble{padding:12px 16px 16px}
+  .pl-ctrl button{min-width:34px;padding:0 6px}
+  .tc-box{padding:24px 6px 14px}
+  .tc-them,.tc-me{padding:3px 7px;font-size:10.5px}
+  .bb{max-width:93%;padding:12px 14px}
+  .meta,#total{display:none}
+  .pos input{width:4.4em}
+}
+</style>
+<style id="avCss"></style>
+</head>
+<body>
+<div class="boot" id="boot" role="status" aria-live="polite"><div class="boot-bub" aria-hidden="true"><i></i><i></i><i></i></div><b>TALKLOG <em>VIEWER</em></b><span id="bootMsg">準備しています</span></div>
+<header class="bar">
+  <div class="bar-in">
+    <div class="ttl"><span id="title">Talklog Viewer</span><span id="meta" class="meta"></span></div>
+    <label class="pos" id="posBox" hidden><input id="pos" type="number" min="1" inputmode="numeric" aria-label="表示中の位置（番号を入れてEnterで移動）"><span id="total"></span></label>
+    <div class="tools">
+      <button class="btn" id="btnHome" title="トップ（使い方・更新履歴）へ">トップ</button>
+      <button class="btn" id="btnPlay" title="今の位置から再生" hidden>▶<span class="wide"> 再生</span></button>
+      <button class="btn" id="btnPrefs">表示</button>
+      <button class="btn" id="btnCast" hidden>登場人物</button>
+      <button class="btn" id="btnOpen">開く</button>
+    </div>
+  </div>
+</header>
+
+<main id="log" class="log"></main>
+
+<section id="empty" class="empty">
+  <div class="drop-card">
+    <div class="big">talklog で保存した HTML をドロップ</div>
+    <p>読み込みはこのブラウザの中だけで行われ、どこにも送信されません。</p>
+    <div class="picks">
+      <button class="btn big primary" id="btnRestore" hidden></button>
+      <div class="picks-row"><button class="btn big primary" id="btnPick">ファイルを選ぶ</button><button class="btn big" id="btnDir">フォルダを選ぶ</button></div>
+    </div>
+    <p class="hint">ログをまとめたフォルダを選ぶ（またはドロップする）と、右上の「開く」から一覧で切り替えられます。</p>
+    <p class="hint" id="avHint">アイコンは <code>avatars/名前.png</code>（jpg・webp も可、120px 前後の正方形がおすすめ）に置くと自動で使われます。<br>読み込んだ後に「登場人物」から選ぶと、大きな画像も表示サイズに合わせてきれいに縮小されます。</p>
+    <p id="err" class="err" hidden></p>
+  </div>
+</section>
+
+<div class="drop-mask">ここにドロップして開く</div>
+<nav class="fab idle" id="fab" hidden><button id="toTop" title="先頭へ" aria-label="先頭へ">↑</button><button id="toEnd" title="末尾へ" aria-label="末尾へ">↓</button></nav>
+
+<dialog id="cast">
+  <form method="dialog" class="dlg-head"><h2>登場人物</h2><button aria-label="閉じる">✕</button></form>
+  <p class="cast-note">選んだ画像はこのブラウザに保存します。立ち絵は「▶ 再生」で使います（背景が透明な PNG は切り抜きのまま、四角い画像はカードとして出ます。立ち絵が無い人はアイコンを丸く出します）。「（…）」付きの名前は、元の名前のアイコン・立ち絵を引き継ぎます（表情ごとに別の立ち絵も選べます）。</p>
+  <ul id="castList"></ul>
+</dialog>
+
+<dialog id="prefs">
+  <form method="dialog" class="dlg-head"><h2>表示設定</h2><button aria-label="閉じる">✕</button></form>
+  <section class="sheet-sec">
+    <h3>吹き出しのテーマ</h3>
+    <div class="themes" id="themes" role="radiogroup" aria-label="吹き出しのテーマ">
+      <button class="tcard" role="radio" data-tp="basic" aria-checked="false"><span class="tc-box"><span class="tc-check"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 6.3l2.4 2.4 4.6-5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span><span class="tc-them">こんにちは</span><span class="tc-me">こんにちは</span></span>ベーシック</button>
+      <button class="tcard" role="radio" data-tp="oreo" aria-checked="false"><span class="tc-box"><span class="tc-check"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 6.3l2.4 2.4 4.6-5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span><span class="tc-them">こんにちは</span><span class="tc-me">こんにちは</span></span>オレオ</button>
+      <button class="tcard" role="radio" data-tp="taro" aria-checked="false"><span class="tc-box"><span class="tc-check"><svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><path d="M2.5 6.3l2.4 2.4 4.6-5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span><span class="tc-them">こんにちは</span><span class="tc-me">こんにちは</span></span>タロ</button>
+    </div>
+  </section>
+  <section class="sheet-sec">
+    <h3>文字の大きさ</h3>
+    <div class="fs" id="fs" role="radiogroup" aria-label="文字の大きさ"><button role="radio" data-fs="xs" aria-checked="false">極小</button><button role="radio" data-fs="s" aria-checked="false">小</button><button role="radio" data-fs="m" aria-checked="false">中</button><button role="radio" data-fs="l" aria-checked="false">大</button></div>
+  </section>
+</dialog>
+
+<dialog id="lib">
+  <form method="dialog" class="dlg-head"><h2>ログを開く</h2><button aria-label="閉じる">✕</button></form>
+  <div class="lib-acts"><button class="btn" id="libPick">ファイルを選ぶ</button><button class="btn" id="libDir">フォルダを選ぶ</button></div>
+  <p class="cast-note" id="libNote" hidden></p>
+  <ul id="libList"></ul>
+</dialog>
+
+<input type="file" id="file" accept=".html,.htm,.json" multiple hidden>
+<input type="file" id="dirInput" webkitdirectory hidden>
+<input type="file" id="avFile" accept="image/*" hidden>
+<input type="file" id="picFile" accept="image/*" hidden>
+
+<dialog id="plPrefs">
+  <form method="dialog" class="dlg-head"><h2>フォント</h2><button aria-label="閉じる">✕</button></form>
+  <section class="sheet-sec">
+    <h3>フォント（吹き出し・地の文・大きな名前）</h3>
+    <p class="cast-note pp-note">標準以外は Google Fonts から読み込みます。インターネットにつながっていないときは端末のフォントで表示します。フォントを取りに行くとき Google に IP アドレスなどが伝わります（ログの中身は送りません）。</p>
+    <ul class="pp-fonts" id="ppFonts"></ul>
+  </section>
+</dialog>
+
+<dialog id="scene">
+  <form method="dialog" class="dlg-head"><h2>場面</h2><button aria-label="閉じる">✕</button></form>
+  <p class="cast-note">地の文とト書きの言葉から推し量った、場面の切り替わりです。違っていたら「外す」、足りなければ下で足してください（ログごとにこのブラウザに保存します）。</p>
+  <p class="sc-now" id="scNow"></p>
+  <div class="sc-add">
+    <select id="scPlace" aria-label="場所"><option value="">場所（そのまま）</option></select>
+    <select id="scTime" aria-label="時間"><option value="">時間（そのまま）</option></select>
+    <select id="scWeather" aria-label="天気"><option value="">天気（そのまま）</option></select>
+    <select id="scLight" aria-label="照明の色"><option value="">照明（そのまま）</option></select>
+    <button class="btn" id="scAdd">この発言から変える</button>
+  </div>
+  <ul id="scList"></ul>
+</dialog>
+
+<section id="play" class="play" hidden aria-label="再生">
+  <canvas id="stage"></canvas>
+  <div class="pl-ui" id="plUi">
+    <div class="hm-deco" id="hmDeco" inert><span class="hm-no" id="hmNo">01</span><span class="hm-kanji" id="hmKanji">使</span><span class="hm-en" id="hmEn">HOW TO USE</span></div>
+    <div class="hm-chip" id="hmChip" inert><b id="hmChipName"></b><span id="hmChipText"></span></div>
+    <div class="pl-name" id="plName" inert><span class="pl-name-sub" id="plNameSub"></span><span class="pl-name-big" id="plNameBig"></span></div>
+    <div class="pl-nar" id="plNar" inert><div class="pl-nar-mask"><div class="pl-nar-list" id="plNarList"></div></div></div>
+    <div class="pl-panel" id="plPanel" inert>
+      <div class="pl-head"><span class="pl-tag" id="plTag"></span><span class="pl-no" id="plNo"></span></div>
+      <div class="pl-bubble"><div class="pl-scroll" id="plScroll"><div class="pl-text" id="plText"></div></div><span class="pl-next">▼</span></div>
+    </div>
+    <div class="pl-hud" id="plHud" inert>
+      <div class="pl-hud-row">
+        <div><div class="pl-lbl">TALKLOG <b>/</b> PLAYBACK</div><div class="pl-count"><b id="plCount"></b><span id="plTotal"></span><em id="plState"></em></div><div class="pl-title" id="plTitle"></div></div>
+        <div class="pl-hud-r"><div id="plSaved"><div class="pl-lbl">SAVED</div><div class="pl-date" id="plDate"></div></div><div class="pl-lbl" id="plPct"></div><div class="pl-lbl" id="plMode"></div><div class="pl-lbl pl-scene" id="plSceneLbl"></div></div>
+      </div>
+      <div class="pl-bar"><i id="plBar"></i></div>
+    </div>
+  </div>
+  <div class="pl-ctrl" id="plCtrl">
+    <button id="plPrev" title="前へ（←）" aria-label="前へ"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg></button>
+    <button id="plToggle"></button>
+    <button id="plFwd" title="次へ（→・クリック）" aria-label="次へ"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"/></svg></button>
+    <span class="sep"></span>
+    <button id="plSpeed" title="速さ"></button>
+    <button id="plSceneBtn" title="場面（背景）の一覧と手直し">場面</button>
+    <button id="plThemeBtn" class="tg" title="ライト・ダークを切り替え" aria-label="ライト・ダークを切り替え"><svg class="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg><svg class="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.5 5.5 0 0 1 6.4 3a5.5 5.5 0 1 0 6.6 6.6z"/></svg></button>
+    <button id="plFontBtn" class="tf" title="フォント" aria-label="フォント">Aa</button>
+    <button id="plRecBtn" title="録画（R）。もう一度押すと止めて保存" aria-label="録画">● 録画</button>
+    <button id="plFull" title="全画面（F）" aria-label="全画面"><svg viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
+    <button id="plClose" title="終了（Esc）" aria-label="終了"><svg viewBox="0 0 16 16"><path d="m3.5 3.5 9 9m0-9-9 9"/></svg></button>
+  </div>
+  <div class="pl-rec" id="plRec" hidden>● REC <span id="plRecTime">00:00</span></div>
+
+  <div class="home" id="home" hidden>
+    <div class="hm-slot" data-slot="nav"><nav class="hm-nav hm-part" id="hmNavBox" aria-label="トップの目次">
+      <div class="hm-brand"><span class="hm-logo" aria-hidden="true"><i></i><i></i><i></i></span><div><b>TALKLOG</b><small>VIEWER · <span id="hmYear"></span></small></div></div>
+      <button data-sec="overview" title="概要" aria-label="概要"><i class="hm-ico">話</i><b>OVERVIEW</b><span>概要</span></button>
+      <button data-sec="howto" title="使い方" aria-label="使い方"><i class="hm-ico">使</i><b>HOW TO</b><span>使い方</span></button>
+      <button data-sec="viewer" title="ビューア" aria-label="ビューア"><i class="hm-ico">読</i><b>VIEWER</b><span>ビューア</span></button>
+      <button data-sec="play" title="再生モード" aria-label="再生モード"><i class="hm-ico">演</i><b>PLAYBACK</b><span>再生モード</span></button>
+      <button data-sec="log" title="更新履歴" aria-label="更新履歴"><i class="hm-ico">歴</i><b>CHANGELOG</b><span>更新履歴</span></button>
+      <div class="hm-status">
+        <div class="hm-online"><span class="hm-tag">STATUS</span><b id="hmState">READY</b><small id="hmStateSub"></small></div>
+        <dl class="hm-dl"><dt>RENDER</dt><dd id="hmMode">—</dd><dt>VERSION</dt><dd id="hmVer"></dd></dl>
+        <div class="hm-tools">
+          <button class="tg" data-act="theme" title="ライト・ダークを切り替え" aria-label="ライト・ダークを切り替え"><svg class="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg><svg class="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.5 5.5 0 0 1 6.4 3a5.5 5.5 0 1 0 6.6 6.6z"/></svg></button>
+          <button class="tf" data-act="font" title="フォント" aria-label="フォント">Aa</button>
+        </div>
+      </div>
+    </nav></div>
+    <main class="hm-main">
+      <div class="hm-hero">
+        <div class="hm-slot" data-slot="head"><div class="hm-part hm-head" id="hmHeadBox" inert><b id="hmHNo">PAGE 00</b><h2 id="hmHTitle">概要</h2><span id="hmHEn">OVERVIEW</span></div></div>
+        <div class="hm-emblem" id="hmEmblem"></div>
+      </div>
+      <div class="hm-secs">
+      <section class="hm-sec" data-sec="overview">
+        <div class="hm-panel"><h3 class="hm-ph">STATUS<em>状態</em></h3><div class="hm-pb" id="hmHero"></div></div>
+      </section>
+      <section class="hm-sec" data-sec="howto">
+        <p class="hm-lead">talklog で保存した zeta のトークを、読み返したり、立ち絵つきで自動再生したりできます。ログはこのブラウザの中だけで読み、どこにも送信しません。</p>
+        <div class="hm-grid">
+          <div class="hm-panel"><h3 class="hm-ph">STEP 1<em>保存</em></h3><div class="hm-pb"><p>zeta のトーク画面で <a href="https://purity0km-droid.github.io/userkit/talklog/" target="_blank" rel="noopener">talklog</a> を動かし、トークを HTML で保存します。</p></div></div>
+          <div class="hm-panel"><h3 class="hm-ph">STEP 2<em>開く</em></h3><div class="hm-pb"><p>HTML をこの画面にドロップするか、ファイル・フォルダを選びます。フォルダを選ぶと、中のログを一覧から切り替えられます。</p></div></div>
+          <div class="hm-panel"><h3 class="hm-ph">STEP 3<em>立ち絵</em></h3><div class="hm-pb"><p>ビューアの「登場人物」で、キャラと自分のアイコン・立ち絵を選びます。背景が透明な PNG は切り抜きのまま出ます。</p></div></div>
+          <div class="hm-panel"><h3 class="hm-ph">STEP 4<em>再生</em></h3><div class="hm-pb"><p>「再生モード」で、読んでいた位置から 1 件ずつ自動で流します。背景は場面に合わせて変わり、録画もできます。</p></div></div>
+        </div>
+        <div class="hm-panel"><h3 class="hm-ph">KEYS<em>再生中の操作</em></h3><div class="hm-pb">
+          <div class="hm-keys"><kbd>クリック / →</kbd><span>送る（文字送り中なら全文を出す）</span><kbd>←</kbd><span>戻る</span><kbd>スペース</kbd><span>一時停止・再開</span><kbd>R</kbd><span>録画を始める・止めて保存</span><kbd>F</kbd><span>全画面</span><kbd>Esc</kbd><span>終了（再生を始めた画面へ戻る。ビューアは再生していた位置から）</span></div>
+        </div></div>
+        <div class="hm-panel"><h3 class="hm-ph">BROWSER<em>対応ブラウザ</em></h3><div class="hm-pb"><p id="hmSupport">Chrome・Edge などの最近のブラウザで使えます。</p></div></div>
+      </section>
+      <section class="hm-sec" data-sec="viewer">
+        <p class="hm-lead">zeta のトーク画面に近い見た目で、ログを読み返します。吹き出しのテーマ・文字の大きさを変えられ、読んだ位置はログごとに覚えます。検索はブラウザのページ内検索（Ctrl+F）で。</p>
+        <div class="hm-panel"><h3 class="hm-ph">OPEN<em>ログを開く</em></h3><div class="hm-pb"><p>talklog で保存した HTML を、この画面にドロップしても開けます。</p>
+          <div class="hm-acts"><button class="btn primary" data-act="pick">ファイルを選ぶ</button><button class="btn" data-act="dir">フォルダを選ぶ</button><button class="btn" data-act="restore" hidden></button><button class="btn" data-act="viewer">ビューアへ</button></div></div></div>
+      </section>
+      <section class="hm-sec" data-sec="play">
+        <p class="hm-lead">ログを 1 件ずつ文字送りで再生します。キャラは左、自分は右に立ち絵が立ち、話している方の側に吹き出しが出ます。地の文は画面の中央を流れ、背景は地の文やト書きの言葉から推し量った場面（店・部屋・外・雨・夜など）に合わせて変わります。</p>
+        <div class="hm-panel"><h3 class="hm-ph">START<em>再生する</em></h3><div class="hm-pb"><p id="hmPlayNote">選んだログを読み込んだら、そのまま再生を始めます。</p>
+          <div id="hmPlaySpeed"></div>
+          <div class="hm-acts"><button class="btn primary" data-act="play" hidden>▶ 続きから再生</button><button class="btn" data-act="play0" hidden>最初から再生</button><button class="btn" data-act="cast" hidden>登場人物・立ち絵</button><button class="btn" data-act="pickplay">ファイルを選んで再生</button><button class="btn" data-act="dirplay">フォルダから選んで再生</button></div></div></div>
+        <div class="hm-panel"><h3 class="hm-ph">FEATURES<em>できること</em></h3><div class="hm-pb"><ul>
+          <li>立ち絵が無い人はアイコンを丸く出します。「アオイ（不安）」のような名前は「アオイ」の立ち絵を引き継ぎ、表情ごとに別の立ち絵も選べます。</li>
+          <li>速さは ゆっくり・ふつう・速い・一括表示 から、この画面か再生中の下のボタンで選べます。</li>
+          <li>場面が違っていたら、再生中の「場面」から外したり、手で足したりできます。</li>
+          <li>「● 録画」で再生のようすを動画（MP4 か WebM）で保存できます。</li>
+          <li>再生中の下のボタンの ☀ / ☾ で配色（ライト・ダーク）を切り替え、「Aa」で吹き出し・地の文のフォントを選べます。この画面の配色は、左下の ☀ / ☾ で再生とは別に切り替えられます。</li></ul></div></div>
+      </section>
+      <section class="hm-sec" data-sec="log">
+        <div class="hm-panel"><h3 class="hm-ph">RELEASES<em>版</em></h3><div class="hm-pb"><ul class="hm-hist" id="hmHist"></ul></div></div>
+      </section>
+      </div>
+    </main>
+    <aside class="hm-side">
+      <div class="hm-slot" data-slot="date"><div class="hm-part hm-date" id="hmClock" inert></div></div>
+      <div class="hm-slot" data-slot="cur"><section class="hm-part hm-panel" id="hmCurBox" inert><h3 class="hm-ph">NOW LOADED<em>ログ</em></h3><div class="hm-pb" id="hmCur"></div></section></div>
+      <div class="hm-slot" data-slot="cast"><section class="hm-part hm-panel" id="hmCastBox" inert><h3 class="hm-ph">CAST<em>登場人物</em></h3><ul class="hm-bars" id="hmCast"></ul></section></div>
+      <div class="hm-slot" data-slot="talk"><section class="hm-part hm-panel" id="hmTalkBox" inert><h3 class="hm-ph">NEXT LINES<em>続きの発言</em></h3><ul class="hm-talk" id="hmTalk"></ul></section></div>
+    </aside>
+  </div>
+</section>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+// 起動したときの読み込み中の表示: トップを 1 度描けて（シェーダーの組み立てが済んで）、フォントと前回のログが揃ったら消す（長くても 6 秒）
+const boot = { done: false, drawn: false, fonts: false, log: true };
+function bootCheck() {
+  if (boot.done) return;
+  const msg = !boot.log ? '前回のログを開いています' : !boot.fonts ? 'フォントを読み込んでいます' : '描画の準備をしています';
+  if ($('bootMsg').textContent !== msg) $('bootMsg').textContent = msg;
+  if (boot.fonts && boot.log && (boot.drawn || !gl)) bootDone();
+}
+function bootDone() {
+  if (boot.done) return;
+  boot.done = true;
+  $('boot').classList.add('out');
+  setTimeout(() => $('boot').remove(), 500);
+  if (play.mode === 'home') homeIntro();  // 部品が出てくる動きは、隠れているあいだではなく見えてから
+}
+setTimeout(bootDone, 6000);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+  del(k) { try { localStorage.removeItem(k); } catch {} },
+};
+const AV_KEY = 'tlv.avatar.', POS_KEY = 'tlv.pos.', FS_KEY = 'tlv.fontSize', THEME_KEY = 'tlv.theme';
+const EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+// avatars/ を見るのは手元で開いたとき（zip を展開した file:// か、確かめ用の localhost）だけ。
+// 公開ページには avatars/ が無く、見に行くと話者ごとに 404 が並ぶ
+const LOCAL = location.protocol === 'file:' || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+if (!LOCAL) $('avHint').innerHTML = 'アイコンは、読み込んだ後に「登場人物」から選べます。大きな画像も表示サイズに合わせてきれいに縮小されます。';
+const NAR_ICON = '<svg class="ic" viewBox="0 0 12 10" aria-hidden="true"><path d="M0 1h12M0 5h12M0 9h7" stroke="currentColor" stroke-width="2" fill="none"/></svg>';
+
+let speakers = [], speakerIndex = new Map(), rows = null, posKey = '', loadToken = 0;
+let items = [], logMeta = { title: '', savedAt: '' };   // 表示中のログ（再生で使う）
+const memAvatars = new Map();   // localStorage が使えないときの保持先
+
+// ---------- 読み込み ----------
+// entryName: 一覧から開いたときのファイル名（一覧で「表示中」にする）
+// quiet: 起動時に前回のログを裏で開くとき。トップの画面を閉じない
+let openToken = 0;
+async function openFile(file, entryName = '', quiet = false) {
+  const t = ++openToken;
+  showError('');
+  toast('読み込み中…', 0);
+  await new Promise(r => setTimeout(r, 30));
+  let data = null;
+  try { data = parseTalklog(await file.text()); } catch (e) { console.error(e); }
+  if (t !== openToken) return false;  // 読み込み中に別のログが選ばれた
+  if (!data || !data.items.length) {
+    fail('talklog のトークが見つかりませんでした。talklog で保存した HTML（または JSON）を選んでください。');
+    return false;
+  }
+  current = entryName;
+  show(data, file.name.replace(/\.[^.]+$/, ''), quiet);
+  return true;
+}
+
+function parseTalklog(text) {
+  const t = text.trim();  // 先頭の BOM も trim で落ちる
+  if (t.startsWith('{')) return fromJson(JSON.parse(t));
+  const m = t.match(/<script[^>]*id=["']talklog-data["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (m) return fromJson(JSON.parse(m[1]));
+  return fromDom(new DOMParser().parseFromString(t, 'text/html'));
+}
+
+function fromJson(d) {
+  if (!d || !Array.isArray(d.items)) return null;
+  return {
+    title: String(d.title || ''), savedAt: d.savedAt || '',
+    items: d.items.map(it => ({ kind: String(it.kind || ''), name: String(it.name || ''), right: !!it.right, body: String(it.body || '') })),
+  };
+}
+
+// 埋め込みデータが無い talklog HTML 用：表示部分から本文を組み立て直す
+function fromDom(doc) {
+  const wrap = { I: '*', EM: '*', B: '**', STRONG: '**' };
+  const md = n => n.nodeType === 3 ? n.nodeValue
+    : n.nodeName === 'BR' ? '\n'
+    : (w => w + [...n.childNodes].map(md).join('') + w)(wrap[n.nodeName] || '');
+  const items = [...doc.querySelectorAll('.m')].map(m => {
+    const bb = m.querySelector('.bb');
+    if (!bb) return null;
+    const ps = bb.querySelectorAll('p');
+    return {
+      kind: m.classList.contains('nar') ? 'narration' : m.classList.contains('info') ? 'info' : 'speech',
+      name: (m.querySelector('.nm')?.textContent || '').trim(),
+      right: m.classList.contains('me'),
+      body: ps.length ? [...ps].map(md).join('\n ') : md(bb),
+    };
+  }).filter(Boolean);
+  const title = (doc.querySelector('h1')?.textContent || doc.title.replace(/\s*—\s*talklog\s*$/, '')).trim();
+  return { title, savedAt: '', items };
+}
+
+// ---------- 本文の整形（zeta の記法: *ト書き* / **太字** / 改行） ----------
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<b>$1</b>')
+    .replace(/\*(?=\S)([^*]*?\S)\*/g, '<i>$1</i>')
+    .replace(/\n/g, '<br>');
+}
+
+// 「改行＋空白」と空行は段落の区切り、ただの改行は段落内の改行として扱う
+function renderBody(body) {
+  const out = [];
+  for (const para of body.replace(/\r\n?/g, '\n').split(/\n[ \t]+|\n[ \t]*\n/)) {
+    const lines = para.split('\n').map(l => l.replace(/^[ \t]+|[ \t]+$/g, '')).filter(Boolean);
+    if (!lines.length) continue;
+    if (lines.length === 1 && /^([-*_])(\s*\1){2,}$/.test(lines[0])) { out.push('<hr>'); continue; }
+    if (lines.every(l => /^\d+[.)]\s/.test(l))) {
+      const start = parseInt(lines[0], 10);
+      out.push(`<ol${start !== 1 ? ` start="${start}"` : ''}>${lines.map(l => `<li>${inline(l.replace(/^\d+[.)]\s+/, ''))}</li>`).join('')}</ol>`);
+      continue;
+    }
+    if (lines.every(l => /^[-*+]\s/.test(l))) {
+      out.push(`<ul>${lines.map(l => `<li>${inline(l.slice(2).trim())}</li>`).join('')}</ul>`);
+      continue;
+    }
+    out.push(`<p>${inline(lines.join('\n'))}</p>`);
+  }
+  return out.join('');
+}
+
+const isNarration = it => it.kind === 'narration' || (!it.name && !it.right && it.kind !== 'info');
+
+function msgHtml(it) {
+  const body = renderBody(it.body);
+  if (isNarration(it)) return `<article class="msg nar">${NAR_ICON}<div class="tx">${body}</div></article>`;
+  if (it.kind === 'info') {
+    return `<article class="msg info"><div class="col">${it.name ? `<div class="nm">${esc(it.name)}</div>` : ''}<div class="bb">${body}</div></div></article>`;
+  }
+  const k = speakerIndex.get(it.name);
+  return `<article class="msg ${it.right ? 'me' : 'them'}"><span class="av" data-k="${k}">${esc(initial(it.name))}</span>`
+    + `<div class="col"><div class="nm">${esc(it.name)}</div><div class="bb">${body}</div></div></article>`;
+}
+
+// ---------- 表示 ----------
+function show(data, fallbackTitle, quiet = false) {
+  const token = ++loadToken;
+  flushSave();  // 切り替える前のログの位置を書いておく
+  buildSpeakers(data.items);
+  const title = data.title || fallbackTitle;
+  $('title').textContent = title;
+  document.title = `${title} — Talklog Viewer`;
+  $('meta').textContent = `${data.items.length.toLocaleString()}件` + (data.savedAt ? ` · ${fmtDate(data.savedAt)} 保存` : '');
+  $('total').textContent = `/ ${data.items.length.toLocaleString()}`;
+  $('pos').max = data.items.length;
+  $('empty').hidden = true;
+  [$('posBox'), $('fab'), $('btnCast'), $('btnPlay')].forEach(el => el.hidden = false);
+  items = data.items;
+  logMeta = { title, savedAt: data.savedAt };
+
+  const box = $('log');
+  box.innerHTML = data.items.map(msgHtml).join('');
+  rows = box.children;
+  updateAvatarCss();
+  resolveAvatars(token);
+
+  posKey = POS_KEY + hash(title + '\0' + data.items.slice(0, 3).map(i => i.body).join('\0'));
+  const saved = parseInt(store.get(posKey), 10) || 0;
+  if (saved > 0 && saved < rows.length) {
+    jump(saved);
+    toast(`前回の続き（${(saved + 1).toLocaleString()}件目）から表示しています`, 4000);
+  } else {
+    jump(0);
+    toast('');
+  }
+  afterLoad(quiet);
+}
+
+// ジャンプ後の位置合わせは、ユーザーが操作したら打ち切る
+let settleId = 0;
+const cancelSettle = () => settleId++;
+['wheel', 'touchstart', 'mousedown', 'keydown'].forEach(t => addEventListener(t, cancelSettle, { capture: true, passive: true }));
+
+function jump(i, block = 'start') {
+  if (!rows || !rows.length) return;
+  i = Math.max(0, Math.min(rows.length - 1, i | 0));
+  const el = rows[i], edge = block === 'end' ? 'bottom' : 'top';
+  el.scrollIntoView({ block });
+  $('pos').value = i + 1;
+  // 上の発言が描画されて高さが変わると位置がずれるので、落ち着くまで合わせ直す
+  const want = el.getBoundingClientRect()[edge];
+  const id = ++settleId;
+  let frames = 0, stable = 0;
+  const settle = () => {
+    if (id !== settleId || !el.isConnected) return;
+    if (Math.abs(el.getBoundingClientRect()[edge] - want) > 1) { el.scrollIntoView({ block }); stable = 0; } else stable++;
+    if (stable < 3 && ++frames < 30) requestAnimationFrame(settle);
+  };
+  requestAnimationFrame(settle);
+}
+
+// 画面上端にある発言の番号（二分探索）
+function topIndex() {
+  const y = document.querySelector('.bar').offsetHeight + 4;
+  let lo = 0, hi = rows.length - 1, ans = rows.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].getBoundingClientRect().bottom > y) { ans = mid; hi = mid - 1; } else lo = mid + 1;
+  }
+  return ans;
+}
+
+// 右下の↑↓はスクロール中だけ出す
+let ticking = false, saveTimer = 0, pendingSave = null, fabTimer = 0;
+const flushSave = () => { clearTimeout(saveTimer); pendingSave?.(); };
+addEventListener('scroll', () => {
+  if (!rows) return;
+  $('fab').classList.remove('idle');
+  clearTimeout(fabTimer);
+  fabTimer = setTimeout(() => $('fab').classList.add('idle'), 1800);
+  if (ticking) return;
+  ticking = true;
+  requestAnimationFrame(() => {
+    ticking = false;
+    const i = topIndex();
+    if (document.activeElement !== $('pos')) $('pos').value = i + 1;
+    clearTimeout(saveTimer);
+    const key = posKey;
+    pendingSave = () => { pendingSave = null; store.set(key, String(i)); };
+    saveTimer = setTimeout(pendingSave, 400);
+  });
+}, { passive: true });
+
+$('pos').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+$('pos').addEventListener('change', e => { if (Number.isFinite(e.target.valueAsNumber)) jump(e.target.valueAsNumber - 1); });
+$('toTop').onclick = () => { cancelSettle(); scrollTo(0, 0); };
+$('toEnd').onclick = () => jump(rows.length - 1, 'end');
+
+// ---------- 表示設定（吹き出しのテーマ・文字の大きさ） ----------
+$('btnPrefs').onclick = () => $('prefs').showModal();
+$('prefs').addEventListener('click', e => { if (e.target === $('prefs')) $('prefs').close(); });
+
+function setTheme(theme) {
+  if (!['basic', 'oreo', 'taro'].includes(theme)) theme = 'basic';
+  document.documentElement.dataset.theme = theme;
+  $('themes').querySelectorAll('[data-tp]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.tp === theme)));
+}
+setTheme(store.get(THEME_KEY));
+$('themes').addEventListener('click', e => {
+  const b = e.target.closest('[data-tp]');
+  if (!b) return;
+  setTheme(b.dataset.tp);
+  store.set(THEME_KEY, b.dataset.tp);
+});
+
+function setFontSize(fs, keepPlace) {
+  if (!['xs', 's', 'm', 'l'].includes(fs)) fs = 'm';
+  const i = keepPlace && rows ? topIndex() : -1;
+  document.documentElement.dataset.fs = fs;
+  $('fs').querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.fs === fs)));
+  if (i >= 0 && scrollY > 0) jump(i);  // 読んでいた発言が画面上端に残るように
+}
+setFontSize(store.get(FS_KEY));
+$('fs').addEventListener('click', e => {
+  const b = e.target.closest('[data-fs]');
+  if (!b) return;
+  setFontSize(b.dataset.fs, true);
+  store.set(FS_KEY, b.dataset.fs);
+});
+
+// ---------- アイコン ----------
+function buildSpeakers(items) {
+  const map = new Map();
+  for (const it of items) {
+    if (isNarration(it) || it.kind === 'info') continue;
+    let sp = map.get(it.name);
+    if (!sp) map.set(it.name, sp = { name: it.name, count: 0, url: '', color: colorFor(it.name) });
+    sp.count++;
+  }
+  speakers = [...map.values()];
+  speakerIndex = new Map(speakers.map((sp, k) => [sp.name, k]));
+}
+
+const initial = name => [...name][0] || '?';
+const baseName = name => (name.match(/^(.+?)\s*[（(][^（）()]*[）)]$/) || [])[1] || '';
+const ownAvatar = name => memAvatars.has(name) ? memAvatars.get(name) : store.get(AV_KEY + name);
+
+const probeCache = new Map();
+function probe(name) {
+  if (!name || !LOCAL) return Promise.resolve('');
+  if (!probeCache.has(name)) {
+    const urls = EXTS.map(ext => `avatars/${encodeURIComponent(name)}.${ext}`);
+    probeCache.set(name, Promise.all(urls.map(canLoad)).then(ok => urls[ok.indexOf(true)] || ''));
+  }
+  return probeCache.get(name);
+}
+const canLoad = url => new Promise(res => { const im = new Image(); im.onload = () => res(true); im.onerror = () => res(false); im.src = url; });
+
+// 見つかった順に反映する（全員の確認を待たない）
+let cssFrame = 0;
+function resolveAvatars(token = loadToken) {
+  const refresh = () => {
+    if (token !== loadToken || cssFrame) return;
+    cssFrame = requestAnimationFrame(() => { cssFrame = 0; updateAvatarCss(); if ($('cast').open) renderCast(); });
+  };
+  for (const sp of speakers) {
+    (async () => {
+      const src = await avatarSrc(sp.name);
+      sp.url = src && await thumb(src, avatarPx());
+      refresh();
+    })();
+  }
+}
+// 縮小する前のアイコン（保存した画像 → avatars/ → 「（…）」を除いた元の名前の順）
+async function avatarSrc(name) {
+  const base = baseName(name);
+  return ownAvatar(name) || await probe(name) || (base && (ownAvatar(base) || await probe(base))) || '';
+}
+
+// ブラウザ任せで大きく縮小すると粗くなるので、表示サイズ（×画面の倍率）ちょうどの画像を作って使う
+const thumbCache = new Map();
+const avatarPx = () => Math.round((parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--av')) || 40) * (devicePixelRatio || 1));
+function thumb(src, px) {
+  const key = px + ' ' + src;
+  if (!thumbCache.has(key)) thumbCache.set(key, shrink(src, px).catch(() => src));
+  return thumbCache.get(key);
+}
+const square = n => Object.assign(document.createElement('canvas'), { width: n, height: n });
+async function shrink(src, px) {
+  const im = new Image();
+  im.src = src;
+  await im.decode();
+  const s = Math.min(im.naturalWidth, im.naturalHeight);
+  if (s <= px) return src;
+  let c = square(s), w = s;
+  c.getContext('2d').drawImage(im, (im.naturalWidth - s) / 2, (im.naturalHeight - s) / 2, s, s, 0, 0, s, s);
+  while (w > px) {  // 半分ずつ縮めると細部がつぶれにくい
+    const n = Math.max(px, Math.ceil(w / 2)), d = square(n), x = d.getContext('2d');
+    x.imageSmoothingQuality = 'high';
+    x.drawImage(c, 0, 0, w, w, 0, 0, n, n);
+    c = d;
+    w = n;
+  }
+  return c.toDataURL('image/png');  // file:// で開いたときの avatars/ の画像はここで例外になり、元の画像を使う
+}
+let lastAvatarPx = avatarPx();
+addEventListener('resize', () => {  // 画面の倍率やスマホ幅への切り替えで必要な大きさが変わる
+  if (!rows || avatarPx() === lastAvatarPx) return;
+  lastAvatarPx = avatarPx();
+  resolveAvatars();
+});
+
+function updateAvatarCss() {
+  $('avCss').textContent = speakers.map((sp, k) => sp.url
+    ? `.av[data-k="${k}"]{background-image:url("${sp.url}");color:transparent}`
+    : `.av[data-k="${k}"]{background-color:${sp.color}}`).join('\n');
+}
+
+async function toAvatarDataUrl(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const im = new Image();
+    im.src = url;
+    await im.decode();
+    const s = Math.min(im.naturalWidth, im.naturalHeight), size = Math.min(256, s);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(im, (im.naturalWidth - s) / 2, (im.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+    return c.toDataURL('image/jpeg', 0.9);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+// ---------- 登場人物パネル ----------
+let pickName = '', castHl = -1;
+function renderCast(hlKey = castHl) {
+  castHl = hlKey;
+  const order = speakers.map((sp, k) => ({ sp, k })).sort((a, b) => b.sp.count - a.sp.count);
+  $('castList').innerHTML = order.map(({ sp, k }) => `<li${k === hlKey ? ' class="hl"' : ''}>`
+    + `<span class="av" data-k="${k}">${esc(initial(sp.name))}</span>`
+    + `<span class="pic" data-pk="${k}" title="立ち絵なし"></span>`
+    + `<span class="cn">${esc(sp.name || '（名前なし）')}<span class="cc">${sp.count.toLocaleString()}件</span></span>`
+    + `<span class="cast-btns"><button class="btn" data-pick="${k}">アイコン</button>`
+    + (ownAvatar(sp.name) ? `<button class="btn" data-reset="${k}">戻す</button>` : '')
+    + `<button class="btn" data-pic="${k}">立ち絵</button><button class="btn" data-unpic="${k}" hidden>外す</button></span>`
+    + '</li>').join('');
+  fillPics();
+}
+// 立ち絵の見本（「（…）」付きの名前が元の名前の立ち絵を使うときは薄く出す）
+let castTok = 0;
+function fillPics() {
+  const tok = ++castTok;
+  $('castList').querySelectorAll('.pic').forEach(el => {
+    const name = speakers[el.dataset.pk].name;
+    Promise.all([loadPic(name), picFor(name)]).then(([own, rec]) => {
+      if (tok !== castTok || !rec) return;
+      el.style.backgroundImage = `url("${picUrl(rec)}")`;
+      el.classList.toggle('inh', !own);
+      el.title = own ? '立ち絵' : '元の名前の立ち絵を使います';
+      el.parentElement.querySelector('[data-unpic]').hidden = !own;
+    });
+  });
+}
+function openCast(hlKey = -1) {
+  renderCast(hlKey);
+  $('cast').showModal();
+  $('castList').querySelector('.hl')?.scrollIntoView({ block: 'nearest' });
+}
+$('btnCast').onclick = () => openCast();
+$('cast').addEventListener('click', e => {
+  if (e.target === $('cast')) return $('cast').close();
+  const pick = e.target.closest('[data-pick]'), reset = e.target.closest('[data-reset]');
+  const pic = e.target.closest('[data-pic]'), unpic = e.target.closest('[data-unpic]');
+  if (pick) { pickName = speakers[pick.dataset.pick].name; $('avFile').value = ''; $('avFile').click(); }
+  if (pic) { pickName = speakers[pic.dataset.pic].name; $('picFile').value = ''; $('picFile').click(); }
+  if (reset) {
+    const name = speakers[reset.dataset.reset].name;
+    memAvatars.delete(name);
+    store.del(AV_KEY + name);
+    dropTextures();
+    resolveAvatars();
+  }
+  if (unpic) storePic(speakers[unpic.dataset.unpic].name, null).then(() => renderCast());
+});
+$('avFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const data = await toAvatarDataUrl(f);
+    if (!store.set(AV_KEY + pickName, data)) {
+      memAvatars.set(pickName, data);
+      toast('このブラウザでは保存できないため、ページを閉じると元に戻ります', 5000);
+    }
+    dropTextures();
+    resolveAvatars();
+  } catch { toast('画像を読み込めませんでした', 4000); }
+});
+$('picFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { await storePic(pickName, await toPic(f)); } catch (err) { console.error(err); toast('画像を読み込めませんでした', 4000); return; }
+  if ($('cast').open) renderCast();
+});
+
+// ---------- 立ち絵（IndexedDB の kv に 'pic.名前' で保存） ----------
+// 保存する形: { buf（画像の中身）, type, w, h, cut（背景が透明な切り抜きか）, color（目立つ色 [r,g,b]）}
+// 読み出すと { blob, w, h, cut, color }。同じ名前は同じオブジェクトを返す（テクスチャの使い回しに使う）
+const PIC_KEY = 'pic.';
+const memPics = new Map(), picCache = new Map(), picUrls = new WeakMap();
+function loadPic(name) {
+  if (!picCache.has(name)) {
+    picCache.set(name, memPics.has(name) ? Promise.resolve(memPics.get(name))
+      : kvGet(PIC_KEY + name).then(r => r?.buf ? { blob: new Blob([r.buf], { type: r.type }), w: r.w, h: r.h, cut: r.cut, color: r.color } : null));
+  }
+  return picCache.get(name);
+}
+async function picFor(name) {
+  const base = baseName(name);
+  return await loadPic(name) || (base ? await loadPic(base) : null);
+}
+const picUrl = rec => { if (!picUrls.has(rec)) picUrls.set(rec, URL.createObjectURL(rec.blob)); return picUrls.get(rec); };
+
+// 長い辺 2048px までに縮め、透明な部分があれば PNG、無ければ WebP にする
+async function toPic(file) {
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, 2048 / Math.max(bmp.width, bmp.height)), w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
+  const c = Object.assign(document.createElement('canvas'), { width: w, height: h }), x = c.getContext('2d');
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  const look = inspect(c);
+  const blob = await new Promise(res => c.toBlob(res, look.cut ? 'image/png' : 'image/webp', .92));
+  if (!blob) throw new Error('画像にできませんでした');
+  return { blob, w, h, ...look };
+}
+// 透明な画素が 4% を超えたら切り抜き。色は鮮やかな画素ほど重くした平均
+function inspect(src) {
+  const n = 48, x = square(n).getContext('2d', { willReadFrequently: true });
+  x.drawImage(src, 0, 0, n, n);
+  const d = x.getImageData(0, 0, n, n).data, sum = [0, 0, 0];
+  let clear = 0, wt = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 26) { clear++; continue; }
+    const w = d[i + 3] / 255 * (.1 + (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2])) / 255);
+    for (let k = 0; k < 3; k++) sum[k] += d[i + k] * w;
+    wt += w;
+  }
+  return { cut: clear > n * n * .04, color: wt ? sum.map(v => Math.round(v / wt)) : null };
+}
+// rec が null なら外す。IndexedDB に Blob ではなく ArrayBuffer で入れる（file:// でも確実に入るように）
+async function storePic(name, rec) {
+  picCache.delete(name);
+  dropTextures();
+  try {
+    const val = rec && { buf: await rec.blob.arrayBuffer(), type: rec.blob.type, w: rec.w, h: rec.h, cut: rec.cut, color: rec.color };
+    await idb('readwrite', st => val ? st.put(val, PIC_KEY + name) : st.delete(PIC_KEY + name));
+    memPics.delete(name);
+  } catch (e) {
+    console.warn(e);
+    if (!rec) return memPics.delete(name);
+    memPics.set(name, rec);
+    toast('このブラウザでは保存できないため、ページを閉じると元に戻ります', 5000);
+  }
+}
+$('log').addEventListener('click', e => {
+  const av = e.target.closest('.av');
+  if (av) openCast(Number(av.dataset.k));
+});
+
+// ---------- フォルダ（中のログを一覧から切り替える） ----------
+// lib: { label, dir（Chrome・Edge でフォルダを選んだときのハンドル。無ければ null）, list: [{ name, title, time, count, get() }] }
+// dir は IndexedDB に保存し、次に開いたときに同じフォルダを読めるようにする
+const LAST_KEY = 'tlv.lastFile';
+const canPickDir = 'showDirectoryPicker' in window;
+let lib = null, current = '', savedDir = null;
+
+const metaCache = new Map();
+function readMeta(file) {
+  const key = `${file.name}\0${file.size}\0${file.lastModified}`;
+  if (!metaCache.has(key)) metaCache.set(key, sniff(file).catch(() => null));
+  return metaCache.get(key);
+}
+// 先頭だけ読んで、talklog のファイルかどうかとタイトル・書き出し日時・件数を調べる
+async function sniff(file) {
+  const head = await file.slice(0, 8192).text();
+  const byName = file.name.match(/^talklog_(.+)_(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)\.\w+$/i);
+  let title = '', date = '', count = 0, m;
+  if (/^\s*\{/.test(head)) {
+    if (!head.includes('"items"')) return null;
+    if ((m = head.match(/"title"\s*:\s*("(?:[^"\\]|\\.)*")/))) title = JSON.parse(m[1]);
+    if ((m = head.match(/"savedAt"\s*:\s*("(?:[^"\\]|\\.)*")/))) date = JSON.parse(m[1]);
+  } else {
+    m = head.match(/<title>([^<]*?)\s*—\s*talklog\s*<\/title>/i);
+    if (!m && !byName) return null;
+    if (m) title = new DOMParser().parseFromString(m[1], 'text/html').documentElement.textContent;
+    if ((m = head.match(/書き出し:\s*([^<／]+?)\s*／\s*([\d,]+)件/))) { date = m[1]; count = parseInt(m[2].replace(/,/g, ''), 10); }
+  }
+  if (byName) { title ||= byName[1]; date ||= `${byName[2]}/${byName[3]}/${byName[4]} ${byName[5]}:${byName[6]}`; }
+  const d = new Date(date);
+  return { name: file.name, title: title || file.name.replace(/\.[^.]+$/, ''), time: isNaN(d) ? file.lastModified : +d, count };
+}
+const sortList = list => list.filter(Boolean).sort((a, b) => b.time - a.time || a.name.localeCompare(b.name, 'ja'));
+const isLogName = name => /\.(html?|json)$/i.test(name);
+
+async function scanDir(dir) {  // フォルダ直下だけを見る
+  const found = [];
+  for await (const h of dir.values()) {
+    if (h.kind !== 'file' || !isLogName(h.name)) continue;
+    found.push(h.getFile().then(readMeta).then(m => m && { ...m, get: () => h.getFile() }, () => null));
+  }
+  return sortList(await Promise.all(found));
+}
+async function listFiles(files) {
+  return sortList(await Promise.all(files.filter(f => isLogName(f.name)).map(f => readMeta(f).then(m => m && { ...m, get: async () => f }))));
+}
+
+async function useDir(dir, resume = false, quiet = false) {
+  let list;
+  try { list = await scanDir(dir); } catch (e) { console.error(e); fail(`フォルダ「${dir.name}」を読めませんでした。`); return; }
+  savedDir = dir;
+  kvSet('dir', dir);
+  return setLib({ label: `フォルダ「${dir.name}」`, dir, list }, resume, quiet);
+}
+
+// resume: 前回読んでいたファイルがあれば、一覧を出さずにそれを開く。quiet は openFile と同じ
+function setLib(next, resume = false, quiet = false) {
+  lib = next;
+  current = '';
+  updateRestore();
+  const { list } = lib;
+  const direct = (resume && lib.dir && list.find(en => en.name === store.get(LAST_KEY))) || (list.length === 1 && list[0]);
+  if (direct) { $('lib').close(); return openEntry(direct, quiet); }
+  else if (list.length) openLib();
+  else { if ($('lib').open) renderLib(); fail(`${lib.label}に talklog のファイルが見つかりませんでした。`); }
+}
+
+async function openEntry(en, quiet = false) {
+  let file;
+  try { file = await en.get(); } catch {
+    toast('ファイルを読めませんでした。フォルダの中身が変わった可能性があります', 5000);
+    return refreshLib();
+  }
+  if (await openFile(file, en.name, quiet) && lib?.dir) store.set(LAST_KEY, en.name);
+}
+
+function openLib() {
+  renderLib();
+  if (!$('lib').open) $('lib').showModal();
+  $('libList').querySelector('.cur')?.scrollIntoView({ block: 'nearest' });
+  refreshLib();
+}
+async function refreshLib() {  // フォルダに足したファイルを一覧に反映する
+  const l = lib;
+  if (!l?.dir) return;
+  try { l.list = await scanDir(l.dir); } catch { return; }
+  if (lib === l && $('lib').open) renderLib();
+}
+function renderLib() {
+  $('libNote').hidden = !lib;
+  if (lib) $('libNote').textContent = `${lib.label}の talklog：${lib.list.length.toLocaleString()}件`;
+  $('libList').innerHTML = lib
+    ? lib.list.map((en, i) => `<li><button${en.name === current ? ' class="cur"' : ''} data-i="${i}" title="${esc(en.name)}">`
+      + `<span class="ln">${esc(en.title)}</span>`
+      + `<span class="ls">${fmtDate(en.time)}${en.count ? ` · ${en.count.toLocaleString()}件` : ''}${en.name === current ? ' · <em>表示中</em>' : ''}</span></button></li>`).join('')
+    : savedDir ? `<li><button data-restore><span class="ln">前回のフォルダ「${esc(savedDir.name)}」を開く</span></button></li>` : '';
+}
+$('lib').addEventListener('click', e => {
+  if (e.target === $('lib')) return $('lib').close();
+  const b = e.target.closest('#libList button');
+  if (!b) return;
+  if (b.hasAttribute('data-restore')) return restoreDir();
+  const en = lib?.list[b.dataset.i];
+  $('lib').close();
+  if (en && en.name !== current) openEntry(en);
+});
+
+async function pickDir() {
+  if (!canPickDir) { $('dirInput').value = ''; return $('dirInput').click(); }
+  let dir;
+  try { dir = await showDirectoryPicker({ id: 'talklog', mode: 'read' }); } catch (e) {
+    if (e.name !== 'AbortError') toast('フォルダを開けませんでした', 4000);
+    return;
+  }
+  useDir(dir);
+}
+// showDirectoryPicker が無いブラウザ用。フォルダの中身を一度に受け取る（あとから足したファイルは選び直すまで出ない）
+$('dirInput').addEventListener('change', async e => {
+  const files = [...e.target.files], depth = f => f.webkitRelativePath.split('/').length;
+  if (!files.length) return;
+  const top = files[0].webkitRelativePath.split('/')[0];
+  setLib({ label: top ? `フォルダ「${top}」` : '選んだフォルダ', dir: null, list: await listFiles(files.filter(f => depth(f) <= 2)) });
+});
+
+// 前回のフォルダ: 読む許可が残っていれば（Chrome の「毎回許可する」など）そのまま開き、無ければボタンを出す
+async function restoreDir() {
+  const dir = savedDir;
+  if (!dir) return;
+  let state = 'denied';
+  try { state = await dir.requestPermission({ mode: 'read' }); } catch {}
+  if (state === 'granted') useDir(dir, true);
+  else toast('フォルダを読む許可がありません。「フォルダを選ぶ」から選び直してください', 5000);
+}
+function updateRestore() {
+  const show = !!savedDir && !lib;
+  $('btnRestore').hidden = !show;
+  if (show) $('btnRestore').textContent = `前回のフォルダ「${savedDir.name}」を開く`;
+  $('btnPick').classList.toggle('primary', !show);
+  renderHome();
+}
+// IndexedDB（フォルダのハンドルは localStorage に入らないため）
+function idb(mode, fn) {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open('tlv', 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('kv');
+    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => {
+      const db = rq.result, tx = db.transaction('kv', mode), r = fn(tx.objectStore('kv'));
+      tx.oncomplete = () => { db.close(); res(r.result); };
+      tx.onerror = tx.onabort = () => { db.close(); rej(tx.error); };
+    };
+  });
+}
+const kvGet = k => idb('readonly', s => s.get(k)).catch(() => undefined);
+const kvSet = (k, v) => idb('readwrite', s => s.put(v, k)).catch(e => console.warn(e));
+
+(async () => {
+  if (!canPickDir) return;
+  boot.log = false;  // 前回のログを裏で開き終わるまで、読み込み中の表示を残す（長くても 3 秒）
+  setTimeout(() => { boot.log = true; bootCheck(); }, 3000);
+  try {
+    const dir = await kvGet('dir');
+    if (dir?.kind !== 'directory') return;
+    savedDir = dir;
+    let state = 'prompt';
+    try { state = await dir.queryPermission({ mode: 'read' }); } catch {}
+    if (state === 'granted' && !rows && !lib) await useDir(dir, true, true);  // 裏で開き、トップの画面はそのまま
+    else updateRestore();
+  } finally { boot.log = true; bootCheck(); }
+})();
+
+// ---------- ファイルを開く・ドロップ ----------
+const pickFile = () => { $('file').value = ''; $('file').click(); };
+$('btnPick').onclick = pickFile;
+$('btnDir').onclick = $('libDir').onclick = pickDir;
+$('btnRestore').onclick = restoreDir;
+$('btnOpen').onclick = openLib;
+$('libPick').onclick = () => { $('lib').close(); pickFile(); };
+$('file').addEventListener('change', e => openFiles([...e.target.files], '選んだファイル'));
+
+// 1つなら直接開き、複数なら一覧にする
+async function openFiles(files, label) {
+  if (files.length > 1) setLib({ label, dir: null, list: await listFiles(files) });
+  else if (files[0]) openFile(files[0]);
+}
+
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+let dragDepth = 0;
+addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+  // フォルダかどうかは drop の処理中にしか取り出せないので、ここで取っておく
+  const items = [...e.dataTransfer.items].filter(it => it.kind === 'file');
+  const handles = items.map(it => it.getAsFileSystemHandle?.().catch(() => null));
+  const entries = items.map(it => it.webkitGetAsEntry?.());
+  openDropped([...e.dataTransfer.files], handles, entries);
+});
+async function openDropped(files, handles, entries) {
+  const dir = (await Promise.all(handles)).find(h => h?.kind === 'directory');
+  if (dir) return useDir(dir);
+  const ent = entries.find(en => en?.isDirectory);
+  if (ent) return setLib({ label: `フォルダ「${ent.name}」`, dir: null, list: await listFiles(await entryFiles(ent)) });
+  openFiles(files, 'ドロップしたファイル');
+}
+// ドロップされたフォルダ直下のファイル（getAsFileSystemHandle が無いブラウザ用）
+async function entryFiles(dir) {
+  const reader = dir.createReader(), all = [];
+  for (let batch; (batch = await new Promise((res, rej) => reader.readEntries(res, rej))).length;) all.push(...batch);
+  return Promise.all(all.filter(en => en.isFile).map(en => new Promise((res, rej) => en.file(res, rej))));
+}
+
+// ---------- 再生（立ち絵を出して 1 件ずつ流す） ----------
+// 画面は WebGL2 の canvas 1 枚（背景の大理石模様・円の飾り・立ち絵）。
+// HTML-in-Canvas が使えるときは、発言の吹き出し・地の文・大きな名前・上の表示も canvas の中に置いて
+// テクスチャとして描き、効果をかける（大きな名前は吹き出しの上の端に重なり、吹き出しの後ろに回る）。使えないときは同じ HTML を canvas の上に重ねる。
+// URL に ?nohic を付けると、使えるブラウザでも重ねる方で動く（見比べ用）。
+// 発言は話している人の側に吹き出しで出す。地の文は画面の中央に積み、続くあいだは上へ流していく。
+const SPEED_KEY = 'tlv.playSpeed';
+const SPEEDS = [  // cps: 1 秒に出す字数、待ち = base + 字数 × per 秒。all は全文をすぐ出し、スクロールだけ読む速さで進める
+  { label: 'ゆっくり', cps: 14, base: 1.8, per: .004 },
+  { label: 'ふつう', cps: 28, base: 1.3, per: .003 },
+  { label: '速い', cps: 55, base: .8, per: .002 },
+  { label: '一括表示', cps: 22, base: 1, per: 0, all: true },
+];
+const ACCENT = [100, 78, 215];
+const PL_ICON = {
+  play: '<svg viewBox="0 0 16 16"><path d="M5 3.2v9.6l7.6-4.8z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 16 16"><path d="M5.5 3.5v9m5-9v9"/></svg>',
+};
+const speedSaved = parseInt(store.get(SPEED_KEY), 10);
+// 再生とトップの表示設定: theme（再生）・homeTheme（トップ）は 'dark' か 'light'、font は Google Fonts の名前（'' は端末のフォント）。
+// トップの既定はライト（参考動画寄り）、再生の既定はダーク
+const PLAY_THEME_KEY = 'tlv.playTheme', HOME_THEME_KEY = 'tlv.homeTheme', FONT_KEY = 'tlv.playFont';
+const prefs = {
+  theme: store.get(PLAY_THEME_KEY) === 'light' ? 'light' : 'dark',
+  homeTheme: store.get(HOME_THEME_KEY) === 'dark' ? 'dark' : 'light',
+  font: store.get(FONT_KEY) || '',
+};
+// on: canvas を動かしているか（トップと再生のどちらでも）。mode: 'home'（トップ）か 'play'（再生）
+// side: 吹き出しの側（-1 キャラ・1 自分・0 真ん中＝インフォボックス）。nar: いまの発言が地の文か。narLast: 地の文の列に最後に足した番号
+const play = {
+  on: false, mode: '', decoEnter: 1, lightK: prefs.homeTheme === 'light' ? 1 : 0, i: 0, who: null, phase: 'type', typed: 0, total: 0, delay: 0, holdT: 0, holdFor: 0, paused: false,
+  speed: SPEEDS[speedSaved] ? speedSaved : 1, enter: 1, nameEnter: 1, nameVis: 0, nameSide: -1, pulse: 0,
+  side: -1, nar: false, narLast: -2, narScroll: 0, narSnap: false, talkVis: 0, narVis: 0, flash: 0,
+  tint: [.25, .2, .5], tintTo: [.25, .2, .5], scroll: 0, lineH: 30, raf: 0, last: 0, tok: 0, needAll: true,
+};
+// 再生の描く順: 立ち絵 → name → nar → panel → hud。deco・chip はトップの紋章まわり（番号と漢字か主役の名前・概要の吹き出し）
+const layers = {
+  hud: { el: $('plHud') }, name: { el: $('plName') }, nar: { el: $('plNar') }, panel: { el: $('plPanel') },
+  deco: { el: $('hmDeco') }, chip: { el: $('hmChip') },
+};
+// トップの置き場所型の部品: 中身（.hm-part）を置き場所（.hm-slot）と同じ位置・幅で描く。
+// fill: 置き場所の高さに合わせる（目次）。live: 押せる（canvas に描くときは当たり判定を描いた位置に合わせる）。dom: canvas に描かず HTML のまま
+const hparts = ['nav', 'head', 'date', 'cur', 'cast', 'talk'].map((key, order) => {
+  const slot = document.querySelector(`.hm-slot[data-slot="${key}"]`);
+  const el = slot.firstElementChild;
+  el.style.setProperty('--d', order * 80 + 'ms');  // 重ねる方式で順に出てくる間隔
+  return { key, slot, el, order, fill: key === 'nav', live: key === 'nav', dom: false, t0: 0, gx: NaN, gy: NaN };
+});
+const hpart = key => hparts.find(P => P.key === key);
+// いまの画面で描く部品だけ（写し直すのもこれだけ。再生中にトップの部品まで写すと、送るたびに引っかかっていた）
+const PLAY_LAYERS = ['hud', 'name', 'nar', 'panel'], HOME_LAYERS = ['deco', 'chip'];
+const allLayers = () => play.mode === 'home' ? [...HOME_LAYERS.map(k => layers[k]), ...hparts.filter(P => !P.dom)] : PLAY_LAYERS.map(k => layers[k]);
+const slots = { L: { side: -1 }, R: { side: 1 } };
+
+// ---- 文字送り: 本文の文字を「出した分」と「まだの分（.rest）」に分け、まだの分は場所だけ取っておく（パネルの大きさが変わらない）
+let parts = [];
+function prepTyping(box) {
+  parts = [];
+  const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), texts = [];
+  for (let n; (n = w.nextNode());) texts.push(n);
+  for (const t of texts) {
+    const rest = document.createElement('span');
+    rest.className = 'rest';
+    t.after(rest);
+    parts.push({ t, rest, chars: Array.from(t.data), n: -1 });
+  }
+  return parts.reduce((s, p) => s + p.chars.length, 0);
+}
+// k 字まで出す。戻り値はまだ出ていない最初の位置（スクロールを合わせる）。書き換えたら revealed を立てる
+let revealed = false;
+function reveal(k) {
+  let at = null;
+  for (const p of parts) {
+    const n = Math.max(0, Math.min(p.chars.length, k));
+    k -= p.chars.length;
+    if (n !== p.n) { p.n = n; p.t.data = p.chars.slice(0, n).join(''); p.rest.textContent = p.chars.slice(n).join(''); revealed = true; }
+    if (!at && n < p.chars.length) at = p.rest;
+  }
+  return at;
+}
+
+// ---- 進め方
+// 一時停止中に送ったとき・戻ったときは、文字送りをせずに全文を出す
+function go(i, instant = false) {
+  i = Math.max(0, Math.min(items.length - 1, i));
+  const it = items[i], nar = isNarration(it), info = it.kind === 'info', plain = nar || info, tok = ++play.tok;
+  play.i = i;
+  const [l, r] = sidesAt(i);
+  setSlot(slots.L, l);
+  setSlot(slots.R, r);
+  slots.L.target = plain ? .3 : it.right ? 0 : 1;
+  slots.R.target = plain ? .3 : it.right ? 1 : 0;
+  const who = plain ? '' : it.name;
+  if (who && who !== play.who) { setName(it); play.nameEnter = 0; play.nameSide = it.right ? 1 : -1; play.pulse = 1; }
+  play.who = who;
+  colorOf(who, it.right).then(c => { if (tok === play.tok) setColor(c); });
+  hud(i);
+  setScene(i);
+  play.nar = nar;
+  let box;
+  if (nar) box = narPara(i);
+  else {
+    play.narLast = -2;
+    fillPanel(it, i);
+    play.side = info ? 0 : it.right ? 1 : -1;
+    play.enter = 0;
+    play.scroll = 0;
+    $('plScroll').scrollTop = 0;
+    box = $('plText');
+  }
+  play.total = prepTyping(box);
+  play.lineH = parseFloat(getComputedStyle(box).lineHeight) || 30;
+  play.typed = 0;
+  play.delay = .06;  // 吹き出しが入ってくる動きと重ねて、すぐ打ち始める
+  play.phase = 'type';
+  if (instant || play.paused) finishTyping();
+  reveal(Math.floor(play.typed));
+  touchAll();
+}
+// 文字送りを終えて「待ち」にする（待ちが過ぎると次へ）
+function finishTyping() {
+  const sp = SPEEDS[play.speed];
+  play.typed = play.total;
+  play.delay = 0;
+  play.phase = 'hold';
+  play.holdT = 0;
+  play.holdFor = sp.base + Math.min(play.total, 500) * sp.per;
+  if (!play.nar) $('plPanel').classList.add('done');
+  touch(layers.panel);
+}
+const advance = () => {
+  if (play.phase === 'type') finishTyping();
+  else if (play.i + 1 < items.length) go(play.i + 1);
+  else toast('最後の発言です', 2000);
+};
+const back = () => { if (play.i > 0) go(play.i - 1, true); };
+// 一時停止は文字送りも待ちもその場で止める（送る・戻るは止めたままでも使える）
+const togglePause = () => { play.paused = !play.paused; syncCtrl(); };
+function setSpeed(v) {
+  if (!SPEEDS[v]) return;
+  play.speed = v;
+  store.set(SPEED_KEY, String(v));
+  syncCtrl();
+}
+const cycleSpeed = () => setSpeed((play.speed + 1) % SPEEDS.length);
+// トップの速さの選択（再生モードの START と概要の STATUS に出す）
+const speedHtml = () => `<div class="hm-speed" role="radiogroup" aria-label="再生の速さ"><span>速さ</span>`
+  + SPEEDS.map((s, i) => `<button role="radio" data-act="speed" data-v="${i}" aria-checked="${i === play.speed}">${s.label}</button>`).join('') + '</div>';
+function syncCtrl() {
+  document.querySelectorAll('.hm-speed [data-v]').forEach(b => b.setAttribute('aria-checked', String(+b.dataset.v === play.speed)));
+  $('plToggle').innerHTML = play.paused ? PL_ICON.play : PL_ICON.pause;
+  $('plToggle').title = (play.paused ? '再開' : '一時停止') + '（スペース）';
+  $('plToggle').setAttribute('aria-label', play.paused ? '再開' : '一時停止');
+  $('plState').textContent = play.paused ? 'PAUSED' : '';
+  $('plSpeed').textContent = SPEEDS[play.speed].label;
+  $('plPanel').classList.toggle('all', !!SPEEDS[play.speed].all);
+  $('plNar').classList.toggle('all', !!SPEEDS[play.speed].all);
+  touchAll();
+}
+
+// 地の文の列に i 件目を足す。直前に足したのが i - 1 件目なら下に続け、そうでなければ（戻った・途中から始めた）
+// 直前に続いていた地の文から並べ直す。列は 8 件まで（古い方から消し、消した分だけスクロールを戻す）
+function narPara(i) {
+  const list = $('plNarList'), el = k => Object.assign(document.createElement('div'), { className: 'pl-np', innerHTML: renderBody(items[k].body) });
+  if (play.narLast !== i - 1 || !list.lastElementChild) {
+    list.replaceChildren();
+    let j = i;
+    while (j > 0 && i - j < 5 && isNarration(items[j - 1])) j--;
+    for (let k = j; k < i; k++) list.append(el(k));
+    play.narSnap = true;
+  }
+  const p = el(i);
+  list.append(p);
+  while (list.children.length > 8) {
+    play.narScroll -= list.children[1].offsetTop - list.children[0].offsetTop;
+    list.firstElementChild.remove();
+  }
+  play.narLast = i;
+  return p;
+}
+
+// 左（キャラ）と右（自分）に立てる人: その発言までで最後に話した人。まだ話していない側は、この後で最初に話す人
+function sidesAt(i) {
+  const side = [null, null];
+  const look = j => {
+    const it = items[j];
+    if (isNarration(it) || it.kind === 'info') return;
+    side[it.right ? 1 : 0] ??= it.name;
+  };
+  for (let j = i; j >= 0 && (side[0] === null || side[1] === null); j--) look(j);
+  for (let j = i + 1; j < Math.min(items.length, i + 2000) && (side[0] === null || side[1] === null); j++) look(j);
+  return side;
+}
+
+function fillPanel(it, i) {
+  const info = it.kind === 'info';
+  $('plPanel').className = 'pl-panel ' + (info ? 'info' : it.right ? 'me' : 'them') + (SPEEDS[play.speed].all ? ' all' : '');
+  $('plTag').textContent = info ? it.name || 'インフォボックス' : it.name;
+  $('plNo').textContent = '#' + pad(i + 1);
+  $('plText').innerHTML = renderBody(it.body);
+}
+function setName(it) {
+  const base = baseName(it.name), sub = base ? it.name.slice(base.length).trim() : '';
+  $('plNameSub').textContent = it.right ? 'USER' : 'CHARACTER';
+  $('plName').classList.toggle('r', !!it.right);
+  $('plNameBig').replaceChildren(base || it.name, ...(sub ? [Object.assign(document.createElement('small'), { textContent: sub })] : []));
+}
+const pad = n => String(n).padStart(String(items.length).length, '0');
+function hud(i) {
+  $('plCount').textContent = pad(i + 1);
+  $('plTotal').textContent = '/ ' + items.length;
+  $('plPct').textContent = ((i + 1) / items.length * 100).toFixed(1) + '%';
+  $('plBar').style.width = ((i + 1) / items.length * 100).toFixed(2) + '%';
+}
+
+// 話す人の色: 立ち絵から取った色 → 自分はビューアの紫、キャラは名前から決めた色。地の文はくすんだ紫
+async function colorOf(name, right) {
+  if (!name) return [74, 66, 98];
+  const rec = await picFor(name).catch(() => null);
+  if (rec?.color) return vivid(rec.color);
+  return right ? ACCENT : hsl(parseInt(hash(baseName(name) || name), 36) % 360, .45, .62);
+}
+function setColor(c) {
+  play.tintTo = c.map(v => v / 255);
+  const v = `rgb(${c.join(',')})`;
+  if ($('play').style.getPropertyValue('--pl-c') === v) return;  // 同じ色なら部品を写し直さない
+  $('play').style.setProperty('--pl-c', v);
+  $('play').style.setProperty('--pl-ink', .299 * c[0] + .587 * c[1] + .114 * c[2] > 165 ? '#141416' : '#fff');
+  touchAll();
+}
+function hsl(h, s, l) {
+  const a = s * Math.min(l, 1 - l), f = n => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+  return [f(0), f(8), f(4)].map(v => Math.round(v * 255));
+}
+// 画像の色が暗すぎ・淡すぎるとき、差し色に使える明るさと鮮やかさにそろえる
+function vivid([r, g, b]) {
+  [r, g, b] = [r / 255, g / 255, b / 255];
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  const h = !d ? 0 : (mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60;
+  const s = d ? d / (1 - Math.abs(2 * l - 1)) : 0;
+  return hsl(h, Math.max(.35, Math.min(.8, s)), Math.max(.5, Math.min(.72, l)));
+}
+
+// ---- 毎フレーム
+function frame(now) {
+  if (!play.on) return;
+  const gap = now - play.last, dt = Math.min(.1, Math.max(0, gap / 1000));
+  play.last = now;
+  step(dt);
+  if (play.perf) perfTick(now, gap);
+  if (hic && !layers[play.mode === 'home' ? 'deco' : 'panel'].ok && now - play.t0 > 1500) fallbackOverlay('HTML の部品を写せませんでした');
+  if (rec) $('plRecTime').textContent = clock((now - rec.t0) / 1000);
+  if (play.mode === 'home') { tickHome(); stepHome(now); }
+  layout();
+  if (hic) $('stage').requestPaint(); else render(now / 1000);
+  play.raf = requestAnimationFrame(frame);
+}
+// 再生を始めてから 3 秒のようすをコンソールに出す（最初の文字が出るまでの時間・コマ数・いちばん長いコマ）。遅いと言われたときの手がかり
+function perfTick(now, gap) {
+  const f = play.perf;
+  f.n++;
+  f.max = Math.max(f.max, gap);
+  if (!f.first && play.mode === 'play' && Math.floor(play.typed) >= 1) f.first = now - f.t0;
+  if (now - f.t0 < 3000) return;
+  console.info(`[Talklog Viewer] 再生: 最初の文字まで ${Math.round(f.first)}ms、最初の 3 秒で ${f.n} コマ（いちばん長いコマ ${Math.round(f.max)}ms）、${hic ? 'HTML-IN-CANVAS' : 'OVERLAY'}`);
+  play.perf = null;
+}
+function step(dt) {
+  const sp = SPEEDS[play.speed], ease = n => 1 - Math.exp(-dt * n);
+  play.enter = Math.min(1, play.enter + dt / .42);
+  play.nameEnter = Math.min(1, play.nameEnter + dt / .7);
+  play.nameVis += ((play.who ? 1 : 0) - play.nameVis) * ease(6);
+  play.talkVis += ((play.nar ? 0 : 1) - play.talkVis) * ease(8);
+  play.narVis += ((play.nar ? 1 : 0) - play.narVis) * ease(play.nar ? 6 : 3);
+  play.pulse = Math.max(0, play.pulse - dt * .8);
+  play.flash = Math.max(0, play.flash - dt * 2.5);
+  stepLook(dt);
+  for (let c = 0; c < 3; c++) play.tint[c] += (play.tintTo[c] - play.tint[c]) * ease(2.2);
+  for (const s of [slots.L, slots.R]) {
+    s.act += (s.target - s.act) * ease(7);
+    if (s.p < 1) s.p = Math.min(1, s.p + dt / .9);
+  }
+  play.decoEnter = Math.min(1, play.decoEnter + dt / .9);
+  if (emblem.p < 1) emblem.p = Math.min(1, emblem.p + dt / .9);
+  emblem.ck += (emblem.ckTo - emblem.ck) * ease(5);
+  for (let c = 0; c < 3; c++) emblem.col[c] += (emblem.colTo[c] - emblem.col[c]) * ease(4);
+  play.lightK += (((play.mode === 'home' ? prefs.homeTheme : prefs.theme) === 'light' ? 1 : 0) - play.lightK) * ease(4);
+  if (play.mode !== 'play') return;
+  if (play.paused) {
+    // 止めているあいだは文字送りも待ちも進めない
+  } else if (play.phase === 'type') {
+    if (play.delay > 0) play.delay -= dt;
+    else if ((play.typed = Math.min(play.total, play.typed + sp.cps * dt)) >= play.total) finishTyping();
+  } else if ((play.holdT += dt) >= play.holdFor) {
+    if (play.i + 1 < items.length) go(play.i + 1);
+    else { play.paused = true; syncCtrl(); stopRec(); toast('最後まで再生しました', 2500); }
+  }
+  revealed = false;
+  const at = reveal(Math.floor(play.typed));
+  if (revealed) touch(play.nar ? layers.nar : layers.panel, play.nar ? $('plNarList').lastElementChild : $('plText'));
+  if (play.nar) {
+    // 地の文: いま出しているところが列の 6 割の高さに来るように、列ごと上へ流す
+    const list = $('plNarList'), cur = list.lastElementChild;
+    const y = at ? at.offsetTop + play.lineH : cur.offsetTop + cur.offsetHeight;
+    const want = Math.max(0, y - $('plNar').clientHeight * .6);
+    play.narScroll = play.narSnap ? want : play.narScroll + (want - play.narScroll) * ease(5);
+    play.narSnap = false;
+    const tf = `translateY(${(-play.narScroll).toFixed(1)}px)`;
+    if (list.style.transform !== tf) { list.style.transform = tf; touch(layers.nar); }
+    return;
+  }
+  // 吹き出し: 出したところが下に隠れないように、本文を送る
+  const sc = $('plScroll'), max = sc.scrollHeight - sc.clientHeight;
+  if (max > 0) {
+    const want = at ? Math.min(max, Math.max(0, at.offsetTop + play.lineH * 1.5 - sc.clientHeight)) : max;
+    play.scroll += (want - play.scroll) * ease(8);
+    if (Math.abs(sc.scrollTop - play.scroll) >= 1) { sc.scrollTop = play.scroll; touch(layers.panel); }
+  }
+}
+// HTML の部品の置き場所（CSS の px）。重ねる方式では、ここで translate と透明度も当てる
+// 吹き出しは話している人の側の端に寄せ、そちらから入ってくる。大きな名前は話している人の立ち絵に半分ほど重ねる
+function layout() {
+  const W = $('play').clientWidth, H = $('play').clientHeight, { hud, name, nar, panel, deco } = layers;
+  const out = t => 1 - (1 - t) ** 3, narrow = W < H * 1.15, home = play.mode === 'home';
+  for (const L of Object.values(layers)) { L.w = L.el.offsetWidth; L.h = L.el.offsetHeight; }
+  // トップの紋章まわり（placeHome）と置き場所型の部品（layoutParts）。トップでは再生の部品を消す
+  if (home) placeHome(W, H, out(play.decoEnter));
+  else for (const L of [deco, layers.chip]) L.alpha = 0;
+  if (hic) layoutParts(home);
+  Object.assign(hud, { x: 24, y: 18, alpha: home ? 0 : 1, glitch: 0 });
+  const e = out(play.enter), m = narrow ? 16 : Math.max(24, W * .06), side = play.side;
+  const px = side < 0 ? m : side > 0 ? W - m - panel.w : (W - panel.w) / 2;
+  Object.assign(panel, {
+    x: px - side * 28 * (1 - e), y: H - 86 - panel.h + 12 * (1 - e),
+    alpha: home ? 0 : play.talkVis * (play.nar ? 1 : e), glitch: play.nar ? 0 : (1 - play.enter) ** 2,
+  });
+  Object.assign(nar, { x: (W - nar.w) / 2, y: H * .1, alpha: home ? 0 : play.narVis, glitch: 0 });
+  // 大きな名前は吹き出しの上の端に、話す人の側へ寄せて下の方を重ねる（吹き出しの後ろに描くので本文は読める）
+  const ne = out(play.nameEnter), ns = play.nameSide, pxL = ns < 0 ? m : W - m - panel.w;
+  const nx = (ns < 0 ? pxL + 6 : pxL + panel.w - name.w - 6) + ns * 40 * (1 - ne);
+  Object.assign(name, {
+    x: Math.max(12, Math.min(W - name.w - 12, nx)), y: Math.max(96, H - 86 - panel.h - name.h * .62),
+    alpha: home ? 0 : play.nameVis * ne, glitch: (1 - play.nameEnter) ** 2 * 1.4,
+  });
+  if (hic) return;
+  for (const L of Object.values(layers)) {
+    L.el.style.translate = `${L.x}px ${L.y}px`;
+    L.el.style.opacity = L.alpha.toFixed(3);
+    L.el.style.filter = L.glitch > .01 ? `blur(${(L.glitch * 6).toFixed(1)}px)` : '';
+    L.el.style.rotate = L.ang ? L.ang + 'rad' : '';
+  }
+}
+
+// トップ: 紋章（吹き出しの形の枠）は #hmEmblem の中に描く。概要は主役の立ち絵を正方形の枠で大きく、ほかのページは置き場所いっぱいの横長の枠。
+// 大きな文字は、概要では主役の名前を枠の下の方に重ね、ほかのページでは枠の中に番号・漢字・英語を収める（番号は枠の角にはみ出す）。
+// 概要だけ、続きの発言を打つ吹き出しを枠の右上に出す
+function placeHome(W, H, de) {
+  const { deco, chip } = layers, ov = homeNow === 'overview', e = emblem;
+  const box = $('hmEmblem').getBoundingClientRect();
+  const hw = Math.max(0, ov ? Math.min(box.width * .34, box.height * .42) : box.width * .42);
+  const hh = ov ? hw : Math.max(0, box.height * .42);
+  const k = .9 + .1 * de;  // ページを替えたとき、少し小さい所から広がる
+  Object.assign(e, { cx: box.left + box.width / 2, cy: box.top + box.height / 2, hw: hw * k, hh: hh * k, a: de });
+  const glitch = (1 - play.decoEnter) ** 2 * 1.6;
+  if (ov) {
+    Object.assign(deco, { x: e.cx - deco.w / 2 + 40 * (1 - de), y: e.cy + hh * .66 - deco.h / 2, alpha: de, glitch });
+  } else {
+    // 枠の大きさを CSS に渡す（8px 刻み。HTML-in-Canvas では大きさが変わるたびに写し直すので）
+    const bw = Math.round(hw * 2 / 8) * 8, bh = Math.round(hh * 2 / 8) * 8, bm = Math.round(bh * .16);
+    if (deco.bw !== bw || deco.bh !== bh) {
+      for (const [name, v] of [['--bw', bw], ['--bh', bh], ['--bm', bm]]) deco.el.style.setProperty(name, v + 'px');
+      Object.assign(deco, { bw, bh, w: bw + bm * 2, h: bh + bm * 2 });
+      touch(deco);
+    }
+    Object.assign(deco, { x: e.cx - bw / 2 - bm + 30 * (1 - de), y: e.cy - bh / 2 - bm, alpha: de, glitch });
+  }
+  Object.assign(chip, {
+    // 紋章が小さい（スマホ）ときも顔にかからないよう、下の端は枠の上から 4 割ほどまでに
+    x: Math.max(8, Math.min(box.right - chip.w, e.cx + hw * .5)), y: Math.max(8, Math.min(e.cy - hh * 1.02 - chip.h * .2, e.cy - hh * .6 - chip.h)) + 14 * (1 - de),
+    alpha: ov ? de : 0, glitch: 0,
+  });
+}
+// 紋章の枠の角の丸み（左上・右上・右下・左下、CSS の px）。ck が 0 で左上、1 で右上を角ばらせる（あいだは途中の形。ページを替えると形が移る）
+function bubRadii(e) {
+  const m = Math.min(e.hw, e.hh), R = m * .46, sh = m * .05;
+  return [sh + (R - sh) * e.ck, R + (sh - R) * e.ck, R, R];
+}
+
+// トップの置き場所型の部品（HTML-in-Canvas のとき）: 置き場所の位置と幅を部品に写し、置き場所には部品の高さを持たせる（ページの並びを崩さない）。
+// 出てくるときは順に、溶けながら少し浮き上がる。目次は押せるので、描いた位置を当たり判定にも伝える（トップでないときは外す）
+let navChkAt = 0;
+function layoutParts(home) {
+  const cv = $('stage'), pr = $('play').getBoundingClientRect(), now = performance.now();
+  const clipOf = sel => { const r = $('home').querySelector(sel).getBoundingClientRect(); return [r.top - pr.top, r.bottom - pr.top]; };
+  const clipMain = home && clipOf('.hm-main'), clipSide = home && clipOf('.hm-side');
+  for (const P of hparts) {
+    if (P.dom) continue;
+    if (!home) {
+      P.alpha = 0;
+      if (P.live && !isNaN(P.gx)) { P.gx = P.gy = NaN; try { cv.clearElementGeometry?.(P.el); } catch {} }
+      continue;
+    }
+    const r = P.slot.getBoundingClientRect(), w = Math.round(r.width) + 'px';
+    if (P.el.style.width !== w) P.el.style.width = w;
+    if (P.fill && innerWidth > 860) {  // 目次は広い画面では列の高さいっぱい。狭い画面（CSS の 860px 以下）では中身の高さ
+      const h = Math.round(r.height) + 'px';
+      if (P.el.style.height !== h) P.el.style.height = h;
+      if (P.slot.style.height) P.slot.style.removeProperty('height');
+    } else {
+      if (P.el.style.height) P.el.style.removeProperty('height');
+      const h = P.el.offsetHeight + 'px';
+      if (P.slot.style.height !== h) P.slot.style.height = h;
+    }
+    const k = Math.min(1, Math.max(0, (now - P.t0) / 900)), x = r.left - pr.left, y = r.top - pr.top;
+    Object.assign(P, {
+      w: P.el.offsetWidth, h: P.el.offsetHeight, x, y: y + 10 * (1 - k) ** 3, alpha: k > 0 ? 1 : 0, p: k, dir: k < 1 ? 1 : 0, glitch: (1 - k) ** 2 * .7,
+      clip: P.key === 'nav' ? null : P.key === 'head' ? clipMain : clipSide,  // 中央の列・右の列はスクロールするので、その枠で切る
+    });
+    if (P.live && (P.gx !== x || P.gy !== y)) {
+      P.gx = x;
+      P.gy = y;
+      try { cv.updateElementGeometry?.(P.el, { canvasTransform: new DOMMatrix([1, 0, 0, 1, x, y]) }); } catch (err) { console.warn(err); }
+    }
+  }
+  if (home && navChkAt && now > navChkAt && hpart('nav').ok && !hpart('nav').dom) { navChkAt = 0; checkNav(); }
+}
+// 目次を canvas に描いたとき、ボタンの真ん中を押して本当にそのボタンに届くかを確かめる。届かなければ目次だけ HTML に戻す
+function checkNav() {
+  const P = hpart('nav'), pr = $('play').getBoundingClientRect();
+  const bad = [...P.el.querySelectorAll('button')].filter(b => b.offsetWidth).find(b => {
+    const hit = document.elementFromPoint(pr.left + P.gx + b.offsetLeft + b.offsetWidth / 2, pr.top + P.gy + b.offsetTop + b.offsetHeight / 2);
+    return !hit || !b.contains(hit);
+  });
+  if (!bad) return;
+  console.warn('HTML-in-Canvas: canvas に描いた目次を押せないので、目次だけ HTML で出します', bad);
+  partToDom(P);
+}
+
+// ---- 立ち絵の枠: { name, cur（いまの画像）, from（入れ替わる前の画像）, p（入れ替わりの進み 0〜1）, act（話している度合い）}
+function resetSlots() {
+  for (const s of [slots.L, slots.R]) Object.assign(s, { name: undefined, cur: null, from: null, p: 1, act: 0, target: 0, tok: 0 });
+}
+function setSlot(s, name) {
+  if (name === s.name) return;
+  s.name = name;
+  const tok = ++s.tok;
+  (name ? texFor(name) : Promise.resolve(null)).then(t => {
+    if (tok !== s.tok || t === s.cur) return;
+    s.from = s.cur;
+    s.cur = t;
+    s.p = 0;
+  });
+}
+// 画面の中の位置（canvas の画素）。cut = 切り抜き（下にそろえて大きく）、card = 四角い画像、round = アイコン
+function slotGeo(s, t, W, H, time) {
+  // 縦長の画面（スマホ）では、下のパネルに隠れないよう少し上に、横幅いっぱい近くまで重ねて置く
+  const narrow = W < H * 1.15, sc = .9 + .1 * s.act;
+  const cx = W * (.5 + s.side * (narrow ? .2 : .26)) + s.side * W * .03 * (1 - s.act);
+  let w, h, y;
+  if (t.kind === 'cut') {
+    h = H * (narrow ? .6 : .94); w = h * t.w / t.h;
+    const mw = W * (narrow ? .85 : .48);
+    if (w > mw) { w = mw; h = w * t.h / t.w; }
+    w *= sc; h *= sc; y = H * (narrow ? .8 : 1.03) - h;
+  } else if (t.kind === 'card') {
+    h = H * (narrow ? .36 : .56); w = h * t.w / t.h;
+    const mw = W * (narrow ? .6 : .34);
+    if (w > mw) { w = mw; h = w * t.h / t.w; }
+    w *= sc; h *= sc; y = H * (narrow ? .4 : .45) - h / 2;
+  } else {
+    w = h = Math.min(H * .38, W * (narrow ? .42 : .26)) * sc;
+    y = H * (narrow ? .4 : .44) - h / 2;
+  }
+  y += Math.sin(time * 1.3 + s.side) * H * .004 * s.act;
+  const cut = t.kind === 'cut';
+  return { rect: [cx - w / 2, y, w, h], cx, cy: cut ? y + h * .33 : y + h / 2, r: cut ? h * .32 : Math.max(w, h) * .62 };
+}
+
+// ---- 場面（文中の言葉から推し量り、背景を変える）
+// 見るのは地の文と、発言の *ト書き* だけ（台詞の「店に戻れば」などで場面が変わらないように）。
+// 手がかりは出てきた順に当て、次の手がかりが出るまで続く。場所ごとに照明の色・明るさを覚えておき、戻ってきたら戻す。
+// 違っていた手がかりは「場面」の画面で外せる。足りないところは手で足せる（ログごとに localStorage に保存）
+const SCENE_KEY = 'tlv.scene.';
+// 場所ごとの見た目。amb: 壁の色、light: 照明の色、win: 窓（左下が 0 の [x, y, 幅, 高さ]）、ほかは部品の強さ
+const PLACES = {
+  shop: { label: '店', amb: [.1, .08, .11], light: [1, .45, .8], neon: 1, bokeh: .5, floor: .8, dim: .9 },
+  living: { label: 'リビング', amb: [.12, .1, .085], light: [1, .78, .55], bokeh: .45, blind: .35, win: [.55, .38, .3, .42] },
+  bedroom: { label: '寝室', amb: [.075, .068, .08], light: [1, .72, .5], bokeh: .28, blind: .5, win: [.6, .36, .26, .44], dim: .8 },
+  kitchen: { label: 'キッチン', amb: [.14, .14, .15], light: [.88, .94, 1], bokeh: .15, tube: .8, win: [.1, .45, .22, .32] },
+  bath: { label: '浴室', amb: [.1, .125, .14], light: [.8, .92, 1], tile: 1, steam: .7, bokeh: .1 },
+  street: { label: '外', outdoor: true, light: [1, .74, .45], bokeh: .75, city: 1 },
+  car: { label: '車', amb: [.045, .045, .06], light: [1, .62, .38], bokeh: .9, win: [.04, .34, .92, .42], dim: .85 },
+  bar: { label: 'バー', amb: [.09, .06, .045], light: [1, .62, .28], bokeh: .9, neon: .35, floor: .5, dim: .85 },
+  cafe: { label: 'カフェ', amb: [.16, .125, .095], light: [1, .86, .62], bokeh: .5, win: [.56, .3, .34, .46] },
+  hospital: { label: '病院', amb: [.15, .16, .17], light: [.86, .95, 1], tube: 1, tile: .35 },
+  school: { label: '学校', amb: [.14, .13, .115], light: [.96, .95, .88], tube: .6, win: [.04, .36, .42, .46] },
+};
+const TIMES = {
+  night: { label: '夜', sky: [.03, .04, .1], amb: .78 },
+  dusk: { label: '夕方', sky: [.6, .28, .2], amb: .95 },
+  morning: { label: '朝', sky: [.6, .66, .72], amb: 1.08 },
+  day: { label: '昼', sky: [.45, .6, .82], amb: 1.12 },
+};
+const WEATHERS = { rain: '雨', snow: '雪', fog: '霧', clear: '晴れ' };
+const LIGHTS = {
+  pink: ['ピンク', [1, .38, .74]], red: ['赤', [1, .2, .22]], blue: ['青', [.32, .52, 1]], pale: ['青白', [.72, .86, 1]],
+  purple: ['紫', [.66, .38, 1]], green: ['緑', [.32, 1, .62]], warm: ['暖色', [1, .64, .32]], gold: ['金', [1, .82, .42]], white: ['白', [.92, .95, 1]],
+};
+const LIGHT_WORDS = [[/青白/, 'pale'], [/ピンク|桃色/, 'pink'], [/赤|紅/, 'red'], [/青|蒼/, 'blue'], [/紫/, 'purple'], [/緑/, 'green'],
+  [/オレンジ|橙|琥珀|暖色|間接照明|蝋燭|ろうそく|キャンドル/, 'warm'], [/金|黄/, 'gold'], [/白|蛍光灯/, 'white']];
+// [手がかりの言葉, 変えるもの]。同じ位置で当てはまるものは上の方が勝つ（「雨が止んだ」を「雨」より先に置く）。
+// keep: いまの場所がこのどれかなら場所を変えない（店にもソファやベッドはあるので）
+const SCENE_CUES = [
+  ['(?:雨|雪)(?:が|は)[^。、\\n]{0,8}?(?:止|上が|やん)|雨上がり|晴れ(?:た|間|渡)', { weather: 'clear' }],
+  ['雨(?:が|の|に|は|音|粒|脚|宿り)|土砂降り|小雨|大雨|傘を(?:差|さ)', { weather: 'rain' }],
+  ['雪(?:が|の|に|は|景色|道)|吹雪|粉雪', { weather: 'snow' }],
+  ['濃霧|霧(?:が|の|に)|靄', { weather: 'fog' }],
+  ['雷鳴|稲光|稲妻|雷が', { flash: true }],
+  ['深夜|真夜中|夜更け|夜中|夜の(?:空気|街|闇|帳)|夜が(?:更|深)|月明かり|星空|街灯|日が暮れ', { time: 'night' }],
+  ['夕方|夕暮れ|夕焼け|夕日|西日|日が(?:傾|沈)|黄昏', { time: 'dusk' }],
+  ['朝日|朝陽|朝の光|朝になっ|夜が明け|明け方|朝焼け|翌朝', { time: 'morning' }],
+  ['昼間|昼下がり|昼過ぎ|日差し|陽射し|日中|陽の光', { time: 'day' }],
+  ['店内に(?:入|足を踏み入れ)|店の(?:中|奥)に|店に(?:入|戻|着)(?:っ|り|る|た|て)|入店|施術室|施術台|カウンターの(?:向こう|奥|中|内側)', { place: 'shop' }],
+  ['店内|店の(?:中|奥)', { place: 'shop', keep: ['street', 'car'] }],  // 外から振り返って見た店内などでは店に戻らない
+  ['バーカウンター|(?<![ァ-ヶー])バー(?:に|で|へ|の)|カクテル', { place: 'bar' }],
+  ['カフェ|喫茶店', { place: 'cafe' }],
+  ['病院|病室|診察室', { place: 'hospital' }],
+  ['車内|助手席|運転席|車に乗|車を(?:出|走ら|停め)|ハンドルを', { place: 'car' }],
+  ['外に出|外へ出|店を出|家を出|マンションを出|ビルを出|路地|大通り|通りを(?:歩|渡|抜)|夜道|歩道|交差点|外の空気|校舎を出|屋上|ベランダ|バルコニー', { place: 'street' }],
+  ['教室|校舎|職員室|保健室|体育館|昇降口', { place: 'school' }],
+  ['浴室|風呂場|湯船|浴槽|脱衣所|シャワーを浴', { place: 'bath' }],
+  ['寝室', { place: 'bedroom' }],
+  ['ベッド(?:に|で|へ|の上|の中)', { place: 'bedroom', keep: ['shop', 'hospital', 'bedroom'] }],
+  ['キッチン|台所', { place: 'kitchen' }],
+  ['リビング|マンションに(?:戻|帰|着)|帰宅|家に(?:帰|戻|着)(?:っ|り|る|た|て)', { place: 'living' }],
+  ['ソファ(?:に|で|へ|の上)', { place: 'living', keep: ['shop', 'bar', 'cafe', 'living'] }],
+  ['(?:ピンク|桃色|赤|紅|青白|青|蒼|紫|緑|オレンジ色?|橙|琥珀|金|黄|白|暖色)(?:い|色|く)?の?(?:光|照明|ライト|灯り|明かり|ネオン|ランプ)|蛍光灯|間接照明|蝋燭|ろうそく|キャンドル', { light: true }],
+  ['ネオン', { neon: true }],
+  ['薄暗|真っ暗|照明を(?:落と|消)|明かりを消|電気を消', { dim: .65 }],
+  ['電気をつけ|明かりをつけ|照明をつけ|明るい(?:部屋|室内|店内)', { dim: 1.15 }],
+];
+const SCENE0 = { place: null, time: null, weather: null, light: null, dim: 1, neon: false };
+
+let sceneAuto = null, scene = null;   // sceneAuto: { items, cues }（ログごとに 1 回）。scene: { cues, states }（外した・足した分を入れたもの）
+const descOf = it => it.kind === 'info' ? '' : isNarration(it) ? it.body : (it.body.match(/\*[^*]+\*/g) || []).join(' ');
+const snippet = (t, at, len) => { const s = Math.max(0, at - 14); return (s ? '…' : '') + t.slice(s, at + len + 18).replace(/\*/g, '').replace(/\s+/g, ' ') + '…'; };
+function autoCues() {
+  if (sceneAuto?.items === items) return sceneAuto.cues;
+  const rx = new RegExp(SCENE_CUES.map(([s]) => `(${s})`).join('|'), 'g'), cues = [];
+  items.forEach((it, i) => {
+    const text = descOf(it);
+    if (!text) return;
+    for (const m of text.matchAll(rx)) {
+      // すぐ後ろに「ような・みたい」が続くのはたとえ話（「施術台に押さえつけられたような」）なので数えない
+      if (/^[^。、\n]{0,14}?(?:ような|ように|みたい|かのよう)/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 20))) continue;
+      let set = SCENE_CUES[m.findIndex((g, n) => n > 0 && g !== undefined) - 1][1];
+      if (set.light) {
+        const w = LIGHT_WORDS.find(([re]) => re.test(m[0]));
+        if (!w) continue;
+        set = { light: w[1] };
+      }
+      cues.push({ i, key: i + ':' + m.index, set, src: snippet(text, m.index, m[0].length) });
+    }
+  });
+  sceneAuto = { items, cues };
+  return cues;
+}
+const sceneKey = () => SCENE_KEY + posKey.slice(POS_KEY.length);
+function sceneEdits() {
+  let e = null;
+  try { e = JSON.parse(store.get(sceneKey())); } catch {}
+  return { off: Array.isArray(e?.off) ? e.off : [], add: Array.isArray(e?.add) ? e.add : [] };
+}
+const saveSceneEdits = ed => store.set(sceneKey(), JSON.stringify(ed));
+// 自動の手がかり（外したものを除く）と手で足したものを並べ、手がかりごとの「その後の場面」を作る
+function buildScene() {
+  const ed = sceneEdits(), off = new Set(ed.off);
+  const cues = autoCues().filter(c => !off.has(c.key))
+    .concat(ed.add.map((a, n) => ({ i: a.i, set: a.set, manual: n, src: '手で足した場面' })))
+    .sort((a, b) => a.i - b.i || (a.manual !== undefined) - (b.manual !== undefined));
+  const mem = {}, states = [], keys = ['place', 'time', 'weather', 'light', 'dim', 'neon'];
+  let st = SCENE0;
+  for (const c of cues) {
+    const next = applyCue(st, c.set, mem);
+    c.changed = !!c.set.flash || keys.some(k => next[k] !== st[k]);  // 一覧には場面が変わったものだけ出す
+    states.push(st = next);
+  }
+  scene = { cues, states };
+}
+function applyCue(st, set, mem) {
+  const s = { ...st };
+  if (set.place !== undefined && !(set.keep || []).includes(s.place)) {
+    if (s.place) mem[s.place] = { light: s.light, dim: s.dim, neon: s.neon };
+    s.place = set.place === 'none' ? null : set.place;
+    Object.assign(s, (s.place && mem[s.place]) || { light: null, dim: 1, neon: false });
+  }
+  if (set.time) {
+    if (set.time === 'morning' && s.time !== 'morning') s.weather = null;  // 次の日になったら天気はいったん戻す
+    s.time = set.time;
+  }
+  if (set.weather) s.weather = set.weather === 'clear' ? null : set.weather;
+  if (set.light) s.light = set.light;
+  if (set.dim) s.dim = set.dim;
+  if (set.neon) s.neon = true;
+  return s;
+}
+// i 件目までで最後の手がかりの番号（無ければ -1）
+function lastCue(i) {
+  let lo = 0, hi = scene.cues.length - 1, ans = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (scene.cues[mid].i <= i) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+  return ans;
+}
+const sceneAt = i => { const k = lastCue(i); return k >= 0 ? scene.states[k] : SCENE0; };
+const sceneLabel = st => [PLACES[st.place]?.label, TIMES[st.time]?.label, WEATHERS[st.weather], st.light && LIGHTS[st.light][0] + 'の光'].filter(Boolean).join(' · ');
+function cueLabel(set) {
+  return [set.place && (PLACES[set.place]?.label || '場所なし'), TIMES[set.time]?.label, WEATHERS[set.weather], set.light && LIGHTS[set.light][0] + 'の光',
+    set.flash && '稲光', set.neon && 'ネオン', set.dim < 1 && '暗い', set.dim > 1 && '明るい'].filter(Boolean).join(' · ');
+}
+// i 件目の場面を見た目の目標にする（look はここへ毎フレーム少しずつ寄っていく）
+function setScene(i) {
+  const k = lastCue(i), st = k >= 0 ? scene.states[k] : SCENE0;
+  lookTo = lookOf(st);
+  for (let j = k; j >= 0 && scene.cues[j].i === i; j--) if (scene.cues[j].set.flash) play.flash = 1;
+  $('plSceneLbl').textContent = 'SCENE · ' + (sceneLabel(st) || '—');
+  touch(layers.hud);
+}
+// 場所が分からないときは大理石だけ（天気は全面に出す）。屋内の雨・雪は窓と、手前にうっすら
+function lookOf(st) {
+  const pl = PLACES[st.place], tm = TIMES[st.time] || { sky: [.12, .13, .2], amb: 1 }, out = !pl || pl.outdoor, rain = st.weather === 'rain';
+  return {
+    marble: pl ? .18 : 1,
+    amb: pl ? (pl.outdoor ? tm.sky.map(v => v * .55) : pl.amb.map(v => v * tm.amb)) : [0, 0, 0],
+    light: st.light ? LIGHTS[st.light][1] : pl ? pl.light : [.6, .5, 1], sky: tm.sky,
+    neon: pl && !pl.outdoor ? Math.max(pl.neon || 0, st.neon ? 1 : 0) : 0,  // 外のネオンは管ではなく、ぼけた灯りの色に出す
+    bokeh: pl?.bokeh || 0, city: pl?.city || 0, blind: pl?.blind || 0, tile: pl?.tile || 0, tube: pl?.tube || 0, floor: pl?.floor || 0,
+    dim: (pl?.dim || 1) * st.dim * (pl?.outdoor && st.time === 'night' ? .8 : 1),
+    win: pl?.win || [0, 0, 0, 0], winA: pl?.win ? 1 : 0, rainWin: rain && pl?.win ? 1 : 0,
+    rain: rain ? (out ? 1 : .12) : 0, snow: st.weather === 'snow' ? (out ? 1 : .1) : 0,
+    fog: st.weather === 'fog' ? (out ? 1 : .3) : pl?.steam || 0, fogCol: pl?.steam ? [.85, .9, .95] : [.6, .62, .7],
+  };
+}
+let look = lookOf(SCENE0), lookTo = lookOf(SCENE0);
+function stepLook(dt) {
+  const k = 1 - Math.exp(-dt * 1.8);
+  for (const key in lookTo) {
+    if (key === 'win' || key === 'winA') continue;
+    if (Array.isArray(lookTo[key])) lookTo[key].forEach((v, n) => { look[key][n] += (v - look[key][n]) * k; });
+    else look[key] += (lookTo[key] - look[key]) * k;
+  }
+  // 窓は場所が変わると位置ごと変わるので、いったん消してから置き直す
+  const same = look.win.every((v, n) => Math.abs(v - lookTo.win[n]) < 1e-3);
+  look.winA += ((same ? lookTo.winA : 0) - look.winA) * (1 - Math.exp(-dt * 4));
+  if (!same && look.winA < .02) look.win = lookTo.win.slice();
+}
+
+// ---- WebGL
+let gl = null, hic = false, P = null, bgFbo = null, bgTex = null, bgW = 0, bgH = 0;
+const allTex = new Set(), iconTex = new Map();
+let recTex = new WeakMap();
+
+const NOISE = `
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p){ float v = 0., a = .5; mat2 m = mat2(1.6, 1.2, -1.2, 1.6);
+  for (int i = 0; i < 5; i++) { v += a * noise(p); p = m * p; a *= .5; } return v; }`;
+const VS_FULL = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+// uAng: 四角の真ん中を軸に回す（ラジアン。画面の向きで時計回りが正。トップの文字の輪と赤い帯）
+const VS_QUAD = `#version 300 es
+uniform vec4 uRect; uniform vec2 uRes; uniform float uAng; out vec2 vUv;
+void main(){ vec2 a = vec2(gl_VertexID & 1, gl_VertexID >> 1); vUv = a;
+  vec2 h = (a - .5) * uRect.zw, s = vec2(sin(uAng), cos(uAng)), p = uRect.xy + uRect.zw * .5 + vec2(h.x * s.y - h.y * s.x, h.x * s.x + h.y * s.y);
+  gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.); }`;
+// 背景（半分の解像度で描く）: 場面が分からないときは、ゆっくり流れる暗い大理石模様。話している人の色を雲のように混ぜる。
+// 場面が分かっているときは、その場所らしい部品（壁と床・窓・ブラインドの光・タイル・蛍光灯・ネオン管・ぼけた灯り・街の灯り・床に映る照明）を
+// 重ねて描き、大理石は薄く残す。部品の強さや色は JS の look（lookOf）から受け取る。uv は左下が 0
+const FS_BG = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uTime, uPulse; uniform vec3 uTint, uAccent, uAmb, uLight, uSky;
+uniform float uMarble, uNeon, uBokeh, uCity, uBlind, uTile, uTube, uFloor, uDim, uWinA, uRainWin, uLightMode; uniform vec4 uWin; out vec4 o;
+${NOISE}
+float box(vec2 q, float e){ vec2 d = smoothstep(vec2(0.), vec2(e), q) * smoothstep(vec2(0.), vec2(e), 1. - q); return d.x * d.y; }
+// ぼけた灯り（3 層の丸。縁を少し明るく）
+vec3 bokeh(vec2 p, float t){
+  vec3 acc = vec3(0.);
+  for (int L = 0; L < 3; L++) {
+    float fl = float(L), s = 2.2 + fl * 1.8;
+    vec2 q = p * s + vec2(t * (.015 + .01 * fl), fl * 7.3), id = floor(q), f = fract(q);
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec2 of = vec2(float(x), float(y)), c = id + of;
+      float h = hash(c + fl * 13.1);
+      if (h < .6) continue;
+      float rad = .16 + .22 * hash(c + 5.3), d = length(f - of - vec2(hash(c + 3.7), hash(c + 9.1)));
+      float disc = smoothstep(rad, rad * .85, d) * (.55 + .45 * smoothstep(rad * .4, rad, d));
+      vec3 hue = mix(uLight, vec3(1., .82, .6), hash(c + 2.2) * .5);
+      acc += hue * disc * (.65 + .35 * sin(t * (.4 + h) + h * 40.)) * (.18 + .3 * hash(c + 1.1)) / (1. + fl * .6);
+    }
+  }
+  return acc;
+}
+// 遠くの街の灯り（小さな点）
+float town(vec2 p, float t){
+  vec2 q = p * vec2(26., 18.), id = floor(q), f = fract(q) - .5;
+  float h = hash(id);
+  return step(.78, h) * (.6 + .4 * sin(t * (1. + h * 3.) + h * 30.)) * smoothstep(.22, 0., length(f));
+}
+// 窓ガラスを流れる雨
+float glassRain(vec2 q, float t){
+  float x = q.x * 34., h = hash(vec2(floor(x), 4.1));
+  float y = fract(q.y * 1.4 + t * (.25 + .35 * h) + h * 7.);
+  return (1. - smoothstep(0., .18, abs(fract(x) - .5 - (h - .5) * .5))) * smoothstep(0., .05, y) * smoothstep(.45, .05, y) * step(.45, h);
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes, p = gl_FragCoord.xy / uRes.y * 1.5; float t = uTime * .03;
+  // 大理石
+  vec2 mq = vec2(fbm(p + vec2(0., t)), fbm(p + vec2(5.2, 1.3) - t));
+  vec2 mr = vec2(fbm(p + 3. * mq + vec2(1.7, 9.2) + .7 * t), fbm(p + 3. * mq + vec2(8.3, 2.8) - .5 * t));
+  float f = fbm(p + 3.4 * mr);
+  float vein = pow(1. - abs(sin((p.x * .9 + p.y * .5 + f * 5.) * 3.14159)), 22.);
+  vec3 mar = mix(vec3(.035, .034, .042), vec3(.115, .11, .13), smoothstep(.25, .9, f));
+  mar += mix(vec3(.75), uAccent, .5) * vein * (.08 + .1 * smoothstep(.3, .8, mr.x));
+  if (uLightMode > .001) {
+    // 明るい表示: 白い大理石に灰色の筋、うっすらミントの雲
+    vec3 lit = mix(vec3(.84, .86, .86), vec3(.97, .975, .975), smoothstep(.2, .85, f));
+    lit -= vec3(.3, .29, .32) * vein * (.5 + .5 * smoothstep(.3, .8, mr.x));
+    lit *= mix(vec3(1.), vec3(.86, .97, .94), smoothstep(.45, 1., mr.y) * .6);
+    mar = mix(mar, lit, uLightMode);
+  }
+  vec3 col = mar;
+  if (uMarble < .999) {
+    // 壁（上の端は少し暗く）と床
+    vec3 set = uAmb * (.55 + .45 * smoothstep(.15, .6, uv.y)) * (1. - .4 * smoothstep(.8, 1., uv.y));
+    float floorK = smoothstep(.24, .2, uv.y);
+    set = mix(set, uAmb * .45, floorK);
+    if (uWinA > .001) {
+      vec2 q = (uv - uWin.xy) / uWin.zw;
+      float inside = box(q, .03) * uWinA;
+      if (inside > 0.) {
+        vec3 sky = uSky * (.7 + .5 * q.y);
+        sky += vec3(1., .85, .6) * town(q * vec2(uWin.z / uWin.w, 1.) * 1.6 + 3., uTime) * .8 * smoothstep(.55, .1, q.y);
+        sky = sky * (1. - .25 * uRainWin) + vec3(.7, .8, .9) * glassRain(q, uTime) * uRainWin * .35;
+        sky += (fbm(q * vec2(3., 2.) + uTime * .01) - .5) * uSky * .25;  // 空のむら
+        float bar = max(1. - smoothstep(0., .012, abs(q.x - .5)), 1. - smoothstep(0., .015, abs(q.y - .55)));
+        set = mix(set, mix(sky, uAmb * .3, bar), inside);
+      }
+      set += uSky * box((q - .5) * .55 + .5, .3) * (1. - inside) * uWinA * .18;  // 窓のまわりににじむ光
+    }
+    if (uBlind > .001) {
+      float s = step(.5, fract((uv.y + uv.x * .35) * 22.)) * smoothstep(.15, .5, uv.x) * smoothstep(.95, .6, uv.x) * smoothstep(.2, .45, uv.y) * smoothstep(.95, .7, uv.y);
+      set += uLight * s * uBlind * .12;
+    }
+    if (uTile > .001) {
+      vec2 g = abs(fract(p * 6.) - .5);
+      set = mix(set, set * .55, smoothstep(.46, .5, max(g.x, g.y)) * uTile * .8) + uLight * .03 * uTile;
+    }
+    if (uTube > .001) {
+      float d = abs(uv.y - .9);
+      set += uLight * uTube * ((1. - smoothstep(0., .012, d)) * smoothstep(.35, .3, abs(uv.x - .5)) * 1.2 + exp(-d * 18.) * smoothstep(.6, .2, abs(uv.x - .5)) * .25);
+    }
+    if (uNeon > .001) {
+      // ネオン管: 上の横 1 本と左右の縦 2 本。ときどきちらつく
+      float fl = .85 + .15 * step(.08, hash(vec2(floor(uTime * 9.), 1.)));
+      float h1 = abs(uv.y - .82) * uRes.y, v1 = abs(uv.x - .09) * uRes.x, v2 = abs(uv.x - .91) * uRes.x;
+      float seg = smoothstep(.62, .58, abs(uv.x - .5)), vseg = smoothstep(0., .05, uv.y - .3) * smoothstep(0., .05, .76 - uv.y);
+      float core = exp(-h1 / 1.6) * seg + (exp(-v1 / 1.6) + exp(-v2 / 1.6)) * vseg;
+      float halo = exp(-h1 / 40.) * seg + (exp(-v1 / 50.) + exp(-v2 / 50.)) * vseg;
+      set += (uLight * halo * .35 + mix(uLight, vec3(1.), .55) * core) * uNeon * fl;
+    }
+    if (uBokeh > .001) set += bokeh(p, uTime) * uBokeh;
+    if (uCity > .001) set += vec3(1., .8, .55) * town(p * .9 + vec2(uTime * .003, 0.), uTime) * uCity * smoothstep(.65, .25, uv.y) * .7;
+    if (uFloor > .001) set += uLight * floorK * (.5 + .5 * fbm(vec2(p.x * 3., p.y * 18.) + uTime * .05)) * uFloor * .18 * (uNeon * .7 + .3);
+    set *= uDim;
+    set = mix(set, sqrt(max(set, 0.)) * .85 + .14, uLightMode);  // 明るい表示では暗い所を持ち上げて淡くする
+    col = mix(set, mar, uMarble);
+  }
+  // 話している人の色の雲: 暗い表示では足し、明るい表示では色を掛ける
+  float cloud = smoothstep(.4, 1., mr.y + mq.x * .4) * (.2 + .14 * uPulse) * mix(.35, 1., uMarble);
+  col += uTint * cloud * (1. - uLightMode);
+  col *= mix(vec3(1.), mix(vec3(1.), .4 + .7 * uTint, cloud * 1.6), uLightMode);
+  o = vec4(col, 1.);
+}`;
+// 手前の天気（立ち絵の上・吹き出しの下に重ねる）: 斜めの雨の筋・雪・霧や湯気。乗算済みアルファ
+const FS_FX = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uTime, uDpr, uRain, uSnow, uFog, uLightMode; uniform vec3 uFogCol; out vec4 o;
+${NOISE}
+float rainLayer(vec2 p, float sc, float sp, float seed){
+  vec2 q = vec2(p.x / (7. * sc), p.y / (110. * sc) + uTime * sp);
+  float h = hash(vec2(floor(q.x), seed)), y = fract(q.y + h * 17.);
+  float on = step(.8, hash(vec2(floor(q.x), floor(q.y + h * 17.) + seed)));
+  return on * smoothstep(1.1 * sc, 0., abs(fract(q.x) - .5) * 7. * sc) * smoothstep(0., .35, y) * smoothstep(1., .8, y);
+}
+void main(){
+  vec2 p = gl_FragCoord.xy / uDpr, uv = gl_FragCoord.xy / uRes;
+  vec3 c = vec3(0.); float a = 0.;
+  if (uRain > .001) {
+    vec2 rp = vec2(p.x + p.y * .2, p.y);
+    float r = (rainLayer(rp, 1., 9., 1.) * .5 + rainLayer(rp * 1.3 + 50., 1.6, 6., 2.) * .3) * uRain;
+    a += r; c += mix(vec3(.78, .84, .95), vec3(.32, .37, .45), uLightMode) * r;  // 明るい表示では暗い筋
+  }
+  if (uSnow > .001) {
+    for (int L = 0; L < 2; L++) {
+      float fl = float(L), s = 40. + fl * 30.;
+      vec2 q = p / s + vec2(sin(uTime * .3 + fl) * .5 + uTime * .05, uTime * (.35 + fl * .2)), id = floor(q);
+      float k = step(.55, hash(id + fl * 9.)) * smoothstep(.12 - fl * .03, 0., length(fract(q) - .5 - (vec2(hash(id + 1.), hash(id + 2.)) - .5) * .6)) * uSnow * .8;
+      a += k; c += mix(vec3(1.), vec3(.62, .68, .76), uLightMode) * k;
+    }
+  }
+  if (uFog > .001) {
+    float k = fbm(uv * vec2(2.5, 4.) + vec2(uTime * .02, 0.)) * smoothstep(1., .1, uv.y) * uFog * .55;
+    c += uFogCol * k; a += k * .6;
+  }
+  o = vec4(c, min(a, 1.));
+}`;
+// 吹き出しの形（角丸の四角で、角ごとに丸みを変える）までの距離。p は真ん中からの位置（y は下向き）、b は半分の大きさ、r は角の丸み（左上・右上・右下・左下）
+const SDF_BUB = `
+float sdBub(vec2 p, vec2 b, vec4 r){
+  float rr = p.x < 0. ? (p.y < 0. ? r.x : r.w) : (p.y < 0. ? r.y : r.z);
+  vec2 q = abs(p) - b + rr;
+  return min(max(q.x, q.y), 0.) + length(max(q, 0.)) - rr;
+}`;
+// 仕上げ: 背景を広げ、話している人の後ろの円の飾り（再生）・紋章の枠（トップ）・周辺の減光・走査線・粒子を足す
+const FS_COMP = `#version 300 es
+precision highp float;
+uniform sampler2D uBg; uniform vec2 uRes; uniform float uTime, uDpr, uFlash, uLightMode; uniform vec4 uRingA, uRingB; uniform vec3 uRingCol;
+uniform vec4 uBub, uBubR; uniform float uBubA, uBubFill; uniform vec3 uBubCol; uniform vec2 uPill; out vec4 o;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float line(float d, float w){ return 1. - smoothstep(0., w, abs(d)); }
+${SDF_BUB}
+// トップの紋章の枠: 中を薄く塗り、枠・内側の細い線・外の点線（ゆっくり回る）・外の太い弧、枠の下に打ち込み中の印（3 つの点が順に光る小さな吹き出し）
+vec3 bubble(vec3 col, vec2 p){
+  vec2 q = p - uBub.xy; float u = uDpr, w = 1.2 * u, sd = sdBub(q, uBub.zw, uBubR), a = atan(q.y, q.x) / 6.28318 + .5;
+  vec3 ink = mix(mix(uBubCol, vec3(1.), .2), uBubCol * .74, uLightMode);
+  float inside = 1. - smoothstep(-w, w, sd);
+  vec3 glass = mix(col * .74 + uBubCol * .07, mix(col, vec3(1.), .5) * mix(vec3(1.), uBubCol, .05), uLightMode);
+  col = mix(col, glass, inside * uBubFill * uBubA);
+  float k = line(sd, w * 1.3) * .95 + line(sd + 7. * u, w * .6) * .3
+    + line(sd - 9. * u, w * .8) * step(.5, fract(a * 72. + uTime * .015)) * .5
+    + line(sd - 17. * u, w * 2.) * step(.82, fract(a * 5. - uTime * .04)) * .75;
+  if (uPill.y > 0.) {
+    vec2 pq = p - (uBub.xy + vec2(uBub.z * uPill.x, uBub.w + 24. * u)), b = vec2(27., 12.) * u;
+    vec2 pp = abs(pq) - b + b.y; float pd = min(max(pp.x, pp.y), 0.) + length(max(pp, 0.)) - b.y;
+    col = mix(col, mix(col * .7 + uBubCol * .14, mix(vec3(1.), uBubCol, .1), uLightMode), (1. - smoothstep(-w, w, pd)) * uBubA * uPill.y);
+    k += line(pd, w) * .8 * uPill.y;
+    for (int i = 0; i < 3; i++) {
+      float fi = float(i), on = .3 + .7 * pow(max(0., sin(uTime * 3.6 - fi * .9)), 3.);
+      k += (1. - smoothstep(2.2 * u, 3.4 * u, length(pq - vec2((fi - 1.) * 9.5 * u, 0.)))) * on * uPill.y;
+    }
+  }
+  return mix(col, ink, clamp(k, 0., 1.) * uBubA);
+}
+float ring(vec2 p, vec4 R, float dir){
+  if (R.w <= 0.) return 0.;
+  vec2 d = p - R.xy; float r = length(d), a = atan(d.y, d.x) / 6.28318 + .5, w = 1.2 * uDpr;
+  float v = line(r - R.z, w) * .45;
+  v += line(r - R.z * 1.1, w) * step(.5, fract(a * 36. + dir * uTime * .04)) * .3;
+  v += line(r - R.z * .9, w * 3.) * step(.82, fract(a * 120. - dir * uTime * .02)) * .55;
+  v += line(r - R.z * 1.24, w) * step(.75, fract(a * 3. + dir * uTime * .07)) * .5;
+  return v * R.w;
+}
+void main(){
+  vec2 fc = gl_FragCoord.xy, uv = fc / uRes, p = vec2(fc.x, uRes.y - fc.y);
+  vec3 col = texture(uBg, uv).rgb;
+  col += uRingCol * (ring(p, uRingA, 1.) + ring(p, uRingB, -1.));
+  if (uBubA > .001) col = bubble(col, p);
+  col *= 1. - mix(.62, .16, uLightMode) * smoothstep(.3, .95, length((uv - .5) * vec2(1., .9)));
+  col *= .985 + .015 * sin(fc.y * 3.14159 / uDpr);
+  col += (hash(fc + fract(uTime * 7.) * 97.) - .5) * mix(.03, .02, uLightMode);
+  col += vec3(.85, .9, 1.) * uFlash * .55;  // 稲光
+  o = vec4(col, 1.);
+}`;
+// 画像（立ち絵・HTML）: 乗算済みアルファ。uMask 1 = 四角の縁をぼかす、2 = 丸、3 = 吹き出しの形（uRad = 角の丸み〔高さに対する割合〕、uAsp = 幅 / 高さ）。uDiss = (進み, 向き) で溶けて入れ替わる。uGlitch で横ずれと色ずれ。
+// uWrap 1 = 横に繰り返す（赤い帯の流れる文字）。uSweep = 上から下へ走る線の位置（0〜1。-1 より小さいと無し）
+const FS_SPR = `#version 300 es
+precision highp float;
+uniform sampler2D uTex; uniform float uAlpha, uBright, uSat, uGlitch, uTime, uDpr, uMask, uFadeB, uWrap, uSweep; uniform vec2 uDiss; uniform vec3 uEdge, uSweepCol;
+uniform vec4 uCrop;  // 画像のどこを描くか（x, y, 幅, 高さ。全体なら 0, 0, 1, 1）
+uniform vec4 uRad; uniform float uAsp;
+in vec2 vUv; out vec4 o;
+${NOISE}
+${SDF_BUB}
+void main(){
+  vec2 uv = uCrop.xy + vUv * uCrop.zw;
+  if (uGlitch > .001) {
+    float band = floor(uv.y * 26.) + floor(uTime * 30.) * 7.;
+    uv.x += (hash(vec2(band, 3.1)) - .5) * uGlitch * .14 * step(.5, hash(vec2(band, 7.7)));
+  }
+  vec4 c = texture(uTex, uv);
+  if (uGlitch > .001) { float ca = uGlitch * .014; c.r = texture(uTex, uv + vec2(ca, 0.)).r; c.b = texture(uTex, uv - vec2(ca, 0.)).b; }
+  if (uWrap < .5) c *= step(0., uv.x) * step(uv.x, 1.);
+  float k = uAlpha;
+  if (uMask > 2.5) k *= 1. - smoothstep(-.004, .002, sdBub((vUv - .5) * vec2(uAsp, 1.), vec2(uAsp, 1.) * .5, uRad));
+  else if (uMask > 1.5) k *= 1. - smoothstep(.485, .5, length(vUv - .5));
+  else if (uMask > .5) k *= smoothstep(0., .06, vUv.x) * smoothstep(0., .06, 1. - vUv.x) * smoothstep(0., .06, vUv.y) * smoothstep(0., .06, 1. - vUv.y);
+  if (uFadeB > 0.) k *= smoothstep(0., uFadeB, 1. - vUv.y);
+  c.rgb = mix(vec3(dot(c.rgb, vec3(.299, .587, .114))), c.rgb, uSat) * uBright;
+  c *= k;
+  if (uSweep > -1.) {  // 走査線（細い線と、通ったあとのうっすらした残り）
+    float d = uv.y - uSweep, s = exp(-d * d * 1400.) * .55 + step(d, 0.) * exp(d * 9.) * .07;
+    c.rgb = mix(c.rgb, uSweepCol * c.a, s);
+  }
+  if (uDiss.y != 0.) {
+    float n = fbm(gl_FragCoord.xy / (60. * uDpr)), th = mix(-.1, 1.1, uDiss.x);
+    float vis = uDiss.y > 0. ? 1. - smoothstep(th - .03, th + .03, n) : smoothstep(th - .03, th + .03, n);
+    float edge = uDiss.y > 0. ? (1. - smoothstep(0., .045, abs(n - th))) * (1. - uDiss.x) : 0.;
+    c = c * vis + vec4(uEdge, 1.) * edge * c.a;
+  }
+  o = c;
+}`;
+
+// シェーダーは組み立てを頼むだけで、でき上がりを待たない（KHR_parallel_shader_compile があればブラウザが裏で組み立てる。
+// 大きな背景のシェーダーは Windows では組み立てに時間がかかり、待つとそのあいだ画面が固まっていた）。でき上がるまでは描かず、読み込み中の表示を出しておく
+let parExt = null, progsOk = false, glBroken = false;
+function compile(vs, fs) {
+  const p = gl.createProgram(), sh = [];
+  for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    gl.attachShader(p, s);
+    sh.push(s);
+  }
+  gl.linkProgram(p);
+  return { p, sh, u: null };
+}
+// 組み立て終わったか。終わっていたら uniform の場所を取る（失敗していたら投げる）
+function linked(prog) {
+  if (prog.u) return true;
+  if (parExt && !gl.getProgramParameter(prog.p, parExt.COMPLETION_STATUS_KHR)) return false;
+  if (!gl.getProgramParameter(prog.p, gl.LINK_STATUS)) throw new Error(prog.sh.map(s => gl.getShaderInfoLog(s)).filter(Boolean).join('\n') || gl.getProgramInfoLog(prog.p));
+  const u = {};
+  for (let i = 0, n = gl.getProgramParameter(prog.p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+    const { name } = gl.getActiveUniform(prog.p, i);
+    u[name] = gl.getUniformLocation(prog.p, name);
+  }
+  prog.u = u;
+  return true;
+}
+function progsReady() {
+  if (progsOk) return true;
+  try { progsOk = Object.values(P).map(linked).every(Boolean); } catch (e) { glFail(e); }
+  return progsOk;
+}
+// シェーダーを組み立てられなかったとき: canvas をやめる（トップは HTML のまま。再生は使えない）
+function glFail(err) {
+  console.error('WebGL のシェーダーを組み立てられませんでした', err);
+  if (hic) fallbackOverlay('SHADER');
+  if (play.mode === 'play') stopPlay(); else stopStage();
+  gl = null;
+  glBroken = true;
+  $('stage').hidden = true;
+  toast('このブラウザでは再生を使えません（WebGL2 のシェーダーを組み立てられませんでした）', 5000);
+  bootDone();
+}
+function newTex() {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+// HTML-in-Canvas は版ごとに名前が変わっている途中なので、新旧どちらでも動くように見る（公式サンプルと同じ考え方）。
+// Chrome 155 から: content="drawable"・texElementSubImage2D（先に texImage2D で場所を取る）。それより前: layoutsubtree・texElementImage2D
+let hicWhy = '';
+function hicSupport() {
+  const C = HTMLCanvasElement.prototype, G = typeof WebGL2RenderingContext === 'function' ? WebGL2RenderingContext.prototype : {};
+  const has = {
+    requestPaint: 'requestPaint' in C, content: 'content' in C, texElementSubImage2D: 'texElementSubImage2D' in G,
+    texElementImage2D: 'texElementImage2D' in G, getElementImageDefaultSize: 'getElementImageDefaultSize' in C, captureElementImage: 'captureElementImage' in C,
+  };
+  hicWhy = /[?&]nohic\b/.test(location.search) ? '?NOHIC'
+    : !has.requestPaint ? 'NO PAINT API'
+    : !has.texElementSubImage2D && !has.texElementImage2D ? 'NO WEBGL UPLOAD API' : '';
+  console.info('[Talklog Viewer] HTML-in-Canvas:', hicWhy || '使う', has);
+  return !hicWhy;
+}
+
+function initGL() {
+  if (gl) return true;
+  if (glBroken) return false;
+  const cv = $('stage');
+  const can = hicSupport();
+  const g = cv.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false });
+  if (!g) return false;
+  gl = g;
+  parExt = gl.getExtension('KHR_parallel_shader_compile');
+  P = { bg: compile(VS_FULL, FS_BG), comp: compile(VS_FULL, FS_COMP), spr: compile(VS_QUAD, FS_SPR), fx: compile(VS_FULL, FS_FX) };
+  gl.bindVertexArray(gl.createVertexArray());
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  if (can) {
+    hic = true;
+    cv.setAttribute('content', 'drawable');
+    cv.setAttribute('layoutsubtree', '');
+    for (const L of Object.values(layers)) { L.el.setAttribute('drawable', ''); L.el.removeAttribute('style'); cv.append(L.el); }
+    for (const P of hparts) { P.el.setAttribute('drawable', ''); cv.append(P.el); }  // 置き場所の高さは layout で保つ
+    cv.addEventListener('paint', onPaint);
+  }
+  for (const L of [...Object.values(layers), ...hparts]) Object.assign(L, { tex: newTex(), tw: 0, th: 0, ok: false });
+  showMode();
+  // canvas の画素は画面の倍率に合わせる（2 倍まで。それ以上は重くなるだけなので抑える）
+  const ro = new ResizeObserver(([en]) => {
+    const css = en.contentBoxSize?.[0], dev = en.devicePixelContentBoxSize?.[0];
+    const cw = css ? css.inlineSize : cv.clientWidth, ch = css ? css.blockSize : cv.clientHeight;
+    const w = dev ? dev.inlineSize : Math.round(cw * devicePixelRatio), h = dev ? dev.blockSize : Math.round(ch * devicePixelRatio);
+    const k = Math.min(1, 2 * cw / w || 1);
+    cv.width = Math.max(1, Math.round(w * k));
+    cv.height = Math.max(1, Math.round(h * k));
+    play.needAll = true;
+  });
+  try { ro.observe(cv, { box: 'device-pixel-content-box' }); } catch { ro.observe(cv); }
+  return true;
+}
+
+// HTML-in-Canvas: 部品の中の文字だけを書き換えても、paint の changedElements に入らず写し直されないことがある
+// （Chrome 156 で、文字送り中の吹き出しが空のままになった。2026-10-27）。書き換えた部品は次の paint で必ず写し直し、
+// 文字を書き換えたときは中の要素の透明度を見えない程度に揺らして、ブラウザにも描き直させる
+let nudgeFlip = false;
+function touch(L, inner) {
+  if (!hic) return;
+  L.force = true;
+  if (inner) inner.style.opacity = (nudgeFlip = !nudgeFlip) ? '.999' : '';
+}
+const touchAll = () => { for (const L of allLayers()) touch(L); };
+
+function showMode() {
+  $('play').dataset.mode = hic ? 'hic' : 'overlay';
+  $('plMode').textContent = $('hmMode').textContent = hic ? 'HTML-IN-CANVAS' : 'OVERLAY' + (hicWhy ? ' · ' + hicWhy : '');
+  $('hmSupport').textContent = !gl ? 'このブラウザでは WebGL2 が使えないため、再生モードは使えません。ビューアは使えます。'
+    : hic ? 'このブラウザでは HTML-in-Canvas が使えます。吹き出しや大きな文字にも効果がかかり、録画は canvas からそのまま撮ります。'
+    : 'このブラウザでは HTML-in-Canvas が使えないため、文字は canvas の上に重ねて表示します。録画は画面の共有で撮ります（許可を聞かれます）。Chrome では chrome://flags/#canvas-draw-element を有効にすると HTML-in-Canvas が使えます。';
+  touch(hpart('nav'), $('hmMode'));
+}
+// HTML-in-Canvas で描けなかったら（API が変わった・paint が来ないなど）、部品を canvas から出して重ねる方式に切り替える
+function fallbackOverlay(why) {
+  console.warn('HTML-in-Canvas をやめて重ねる方式にします:', why, layers.panel.err || '');
+  hic = false;
+  hicWhy = layers.panel.err ? 'UPLOAD FAILED' : !layers.panel.el.offsetWidth ? 'NO LAYOUT' : 'NO PAINT EVENT';  // NO LAYOUT = canvas の中の HTML に大きさが付かない
+  const cv = $('stage');
+  cv.removeEventListener('paint', onPaint);
+  cv.removeAttribute('content');
+  cv.removeAttribute('layoutsubtree');
+  for (const L of Object.values(layers)) { L.el.removeAttribute('drawable'); $('plUi').append(L.el); }
+  for (const P of hparts) if (!P.dom) partToDom(P);
+  showMode();
+}
+// トップの部品を canvas から置き場所（.home の中の HTML）へ戻す
+function partToDom(P) {
+  P.dom = true;
+  P.el.removeAttribute('drawable');
+  for (const k of ['width', 'height', 'opacity']) P.el.style.removeProperty(k);
+  P.slot.style.removeProperty('height');
+  P.slot.append(P.el);
+}
+
+// HTML の部品をテクスチャへ写す（HTML-in-Canvas）。描き方が変わった部品と、まだ写せていない部品を写す
+function onPaint(e) {
+  if (!play.on) return;
+  const changed = e.changedElements || [];
+  for (const L of allLayers()) {
+    if (play.needAll || !L.ok || L.force || changed.includes(L.el)) { upLayer(L); L.force = false; }
+  }
+  play.needAll = false;
+  render(performance.now() / 1000);
+}
+function upLayer(L) {
+  try {
+    if (!L.el.offsetWidth || !L.el.offsetHeight) return;
+    for (let i = 0; i < 8 && gl.getError(); i++);  // 前に溜まっていたエラーを捨てる
+    gl.bindTexture(gl.TEXTURE_2D, L.tex);
+    if (gl.texElementSubImage2D) {
+      const [w, h] = elemSize(L.el);
+      if (w !== L.tw || h !== L.th) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        L.tw = w;
+        L.th = h;
+      }
+      gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, L.el);
+    } else if (gl.texElementImage2D.length === 3) {
+      gl.texElementImage2D(gl.TEXTURE_2D, gl.RGBA8, L.el);                                // Chrome 150〜154
+    } else {
+      gl.texElementImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, L.el);  // Chrome 149 まで
+    }
+    const e = gl.getError();  // 大きさが合わないなどは例外ではなく GL のエラーになる
+    if (e) throw new Error('WebGL のエラー ' + e);
+    L.ok = true;
+  } catch (err) {
+    L.err = String(err?.message || err);
+    if (!L.warned) { L.warned = true; console.warn('HTML-in-Canvas: 写せませんでした', L.el.id, err); }
+  }
+}
+// 部品を写すのに要るテクスチャの大きさ（canvas の画素）。新しい API が無ければ、CSS の大きさ × canvas の倍率で見積もる
+function elemSize(el) {
+  const cv = $('stage');
+  if (cv.getElementImageDefaultSize) { const s = cv.getElementImageDefaultSize(el); return [Math.ceil(s.width), Math.ceil(s.height)]; }
+  if (cv.captureElementImage) {
+    const im = cv.captureElementImage(el);
+    try { if (im.width && im.height) return [Math.ceil(im.width), Math.ceil(im.height)]; } finally { im.close?.(); }
+  }
+  const d = cv.width / Math.max(1, cv.clientWidth);
+  return [Math.ceil(el.offsetWidth * d), Math.ceil(el.offsetHeight * d)];
+}
+
+// 立ち絵（無ければアイコン）のテクスチャ。同じ画像は使い回す
+async function texFor(name) {
+  const rec = await picFor(name).catch(() => null);
+  if (rec) {
+    if (!recTex.has(rec)) {
+      recTex.set(rec, createImageBitmap(rec.blob).then(b => {
+        const t = imgTex(b, b.width, b.height, false);
+        b.close();
+        return t && { ...t, kind: rec.cut ? 'cut' : 'card' };
+      }).catch(() => null));
+    }
+    return recTex.get(rec);
+  }
+  const src = await avatarSrc(name);
+  if (!src) return null;
+  if (!iconTex.has(src)) {
+    iconTex.set(src, (async () => {
+      const im = new Image();
+      im.src = src;
+      await im.decode();
+      const t = imgTex(im, im.naturalWidth, im.naturalHeight, true);
+      return t && { ...t, kind: 'round' };
+    })().catch(() => null));
+  }
+  return iconTex.get(src);
+}
+function imgTex(img, w, h, sq) {
+  const s = Math.min(w, h), cw = sq ? s : w, ch = sq ? s : h;
+  const c = Object.assign(document.createElement('canvas'), { width: cw, height: ch });
+  c.getContext('2d').drawImage(img, sq ? (w - s) / 2 : 0, sq ? (h - s) / 2 : 0, cw, ch, 0, 0, cw, ch);
+  const tex = newTex();
+  try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c); }
+  catch { gl.deleteTexture(tex); return null; }  // file:// で開いたときの avatars/ の画像などは canvas が汚染されて使えない
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  allTex.add(tex);
+  return { tex, w: cw, h: ch };
+}
+// アイコン・立ち絵を変えたら作り直す（次に再生したときに読み直す）
+function dropTextures() {
+  if (gl) allTex.forEach(t => gl.deleteTexture(t));
+  allTex.clear();
+  iconTex.clear();
+  recTex = new WeakMap();
+  Object.assign(emblem, { name: null, started: false, t: null });  // トップの紋章と主役の色も読み直す
+  mainCol.name = '';
+}
+
+function render(time) {
+  if (!progsReady()) return;
+  const cv = $('stage'), W = cv.width, H = cv.height, d = W / Math.max(1, cv.clientWidth), u = P.spr.u;
+  if (bgW !== Math.ceil(W / 2) || bgH !== Math.ceil(H / 2)) {
+    bgW = Math.ceil(W / 2);
+    bgH = Math.ceil(H / 2);
+    if (bgTex) { gl.deleteTexture(bgTex); gl.deleteFramebuffer(bgFbo); }
+    bgTex = newTex();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, bgW, bgH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    bgFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bgFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bgTex, 0);
+  }
+  gl.disable(gl.BLEND);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, bgFbo);
+  gl.viewport(0, 0, bgW, bgH);
+  gl.useProgram(P.bg.p);
+  const b = P.bg.u;
+  gl.uniform2f(b.uRes, bgW, bgH);
+  gl.uniform1f(b.uTime, time);
+  gl.uniform1f(b.uPulse, play.pulse);
+  gl.uniform3f(b.uTint, ...play.tint);
+  gl.uniform3f(b.uAccent, ...ACCENT.map(v => v / 255));
+  gl.uniform3f(b.uAmb, ...look.amb);
+  gl.uniform3f(b.uLight, ...look.light);
+  gl.uniform3f(b.uSky, ...look.sky);
+  for (const k of ['marble', 'neon', 'bokeh', 'city', 'blind', 'tile', 'tube', 'floor', 'dim', 'winA', 'rainWin']) {
+    gl.uniform1f(b['u' + k[0].toUpperCase() + k.slice(1)], look[k]);
+  }
+  gl.uniform4f(b.uWin, ...look.win);
+  gl.uniform1f(b.uLightMode, play.lightK);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(P.comp.p);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, bgTex);
+  gl.uniform2f(P.comp.u.uRes, W, H);
+  gl.uniform1f(P.comp.u.uTime, time);
+  gl.uniform1f(P.comp.u.uDpr, d);
+  gl.uniform1f(P.comp.u.uFlash, play.flash);
+  gl.uniform1f(P.comp.u.uLightMode, play.lightK);
+  // 円の飾り: 暗い表示では話す人の色で明るく、明るい表示では墨色の線（色を引く）
+  gl.uniform3f(P.comp.u.uRingCol, ...play.tint.map((v, n) => .22 * (.55 + .45 * v) * (1 - play.lightK) - [.3, .29, .32][n] * play.lightK));
+  const home = play.mode === 'home', c = P.comp.u, e = emblem;
+  gl.uniform1f(c.uBubA, home ? e.a : 0);
+  if (home) {  // トップは紋章の枠（吹き出しの形）。円の飾りは出さない
+    gl.uniform4f(c.uBub, e.cx * d, e.cy * d, e.hw * d, e.hh * d);
+    gl.uniform4f(c.uBubR, ...bubRadii(e).map(v => v * d));
+    gl.uniform3f(c.uBubCol, ...e.col);
+    gl.uniform1f(c.uBubFill, homeNow === 'overview' && e.t ? 0 : 1);
+    gl.uniform2f(c.uPill, .6 * (1 - 2 * e.ck), homeNow === 'overview' ? 0 : 1);  // 打ち込み中の印は、角ばらせた側と反対の下に
+    gl.uniform4f(c.uRingA, 0, 0, 0, 0);
+    gl.uniform4f(c.uRingB, 0, 0, 0, 0);
+  } else {
+    [slots.L, slots.R].forEach((s, k) => {
+      const t = s.cur || s.from, g = t && slotGeo(s, t, W, H, time);
+      gl.uniform4f(k ? P.comp.u.uRingB : P.comp.u.uRingA, g ? g.cx : 0, g ? g.cy : 0, g ? g.r : 0, g ? Math.max(0, s.act - .5) * 2 : 0);
+    });
+  }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(P.spr.p);
+  gl.uniform2f(u.uRes, W, H);
+  gl.uniform1f(u.uTime, time);
+  gl.uniform1f(u.uDpr, d);
+  gl.uniform3f(u.uEdge, .78, .7, 1);
+  gl.uniform3f(u.uSweepCol, ...emblem.col.map(v => v * (play.lightK > .5 ? .8 : 1)));  // 走査線（トップの部品）はページの差し色
+  const sprite = (tex, r, o = {}) => {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform4f(u.uRect, ...r);
+    gl.uniform1f(u.uAng, (o.ang || 0) + (o.spin || 0));
+    gl.uniform1f(u.uWrap, o.wrap ? 1 : 0);
+    gl.uniform1f(u.uSweep, o.sweep ?? -2);
+    gl.uniform1f(u.uAlpha, o.alpha ?? 1);
+    gl.uniform1f(u.uBright, o.bright ?? 1);
+    gl.uniform1f(u.uSat, o.sat ?? 1);
+    gl.uniform1f(u.uGlitch, o.glitch || 0);
+    gl.uniform1f(u.uMask, o.mask || 0);
+    gl.uniform1f(u.uFadeB, o.fadeB || 0);
+    gl.uniform2f(u.uDiss, o.p ?? 1, o.dir || 0);
+    gl.uniform4f(u.uCrop, ...(o.crop || [0, 0, 1, 1]));
+    gl.uniform4f(u.uRad, ...(o.rad || [0, 0, 0, 0]));
+    gl.uniform1f(u.uAsp, o.asp || 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  };
+  const layer = L => { if (L.ok && L.alpha > .002) sprite(L.tex, [L.x * d, L.y * d, L.w * d, L.h * d], L); };
+  const portrait = s => {
+    const one = (t, dir) => {
+      if (!t) return;
+      sprite(t.tex, slotGeo(s, t, W, H, time).rect, {
+        bright: .34 + .66 * s.act, sat: .3 + .7 * s.act, p: s.p, dir,
+        mask: t.kind === 'card' ? 1 : t.kind === 'round' ? 2 : 0, fadeB: t.kind === 'cut' ? .16 : 0,
+      });
+    };
+    if (s.p < 1) { one(s.from, -1); one(s.cur, 1); } else one(s.cur, 0);
+  };
+  if (home) {
+    // 概要の紋章: 主役の立ち絵の上の方（顔のあたり）を正方形に切り出し、吹き出しの枠の形に切る。その上に名前（大きな文字）
+    const t = e.t;
+    if (homeNow === 'overview' && t && e.hw > 0) {
+      const crop = t.w > t.h ? [(1 - t.h / t.w) / 2, 0, t.h / t.w, 1] : [0, t.kind === 'cut' ? .03 : (1 - t.w / t.h) / 2, 1, t.w / t.h];
+      sprite(t.tex, [(e.cx - e.hw) * d, (e.cy - e.hh) * d, e.hw * 2 * d, e.hh * 2 * d], {
+        mask: 3, rad: bubRadii(e).map(v => v / (e.hh * 2)), asp: e.hw / e.hh, alpha: e.a, crop, p: e.p, dir: e.p < 1 ? 1 : 0,
+      });
+    }
+    if (!boot.done) { boot.drawn = true; bootCheck(); }
+    if (!hic) return;
+    // 大きな文字 → 吹き出し → 置き場所型の部品
+    const s = still();
+    layer(layers.deco);
+    layer(layers.chip);
+    for (const P of hparts) {
+      if (P.dom || !P.ok || P.alpha <= .002) continue;
+      const y0 = Math.max(P.y, P.clip ? P.clip[0] : -1e9), y1 = Math.min(P.y + P.h, P.clip ? P.clip[1] : 1e9);
+      if (y1 <= y0) continue;
+      const sw = ((time - P.order * 1.7) % 12) / 1.2 - .1;  // 12 秒ごとに、部品ごとにずらして走査線を通す
+      sprite(P.tex, [P.x * d, y0 * d, P.w * d, (y1 - y0) * d], {
+        alpha: P.alpha, p: P.p, dir: P.dir, glitch: P.glitch, crop: [0, (y0 - P.y) / P.h, 1, (y1 - y0) / P.h], sweep: s || sw > 1.15 || P.p < 1 ? -2 : sw,
+      });
+    }
+    return;
+  }
+  (slots.L.act <= slots.R.act ? [slots.L, slots.R] : [slots.R, slots.L]).forEach(portrait);
+  if (hic) layer(layers.name);  // 大きな名前は立ち絵の前、吹き出しの後ろ
+  if (look.rain + look.snow + look.fog > .003) {
+    const x = P.fx.u;
+    gl.useProgram(P.fx.p);
+    gl.uniform2f(x.uRes, W, H);
+    gl.uniform1f(x.uTime, time);
+    gl.uniform1f(x.uDpr, d);
+    gl.uniform1f(x.uRain, look.rain);
+    gl.uniform1f(x.uSnow, look.snow);
+    gl.uniform1f(x.uFog, look.fog);
+    gl.uniform1f(x.uLightMode, play.lightK);
+    gl.uniform3f(x.uFogCol, ...look.fogCol);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.useProgram(P.spr.p);
+  }
+  if (hic) { layer(layers.nar); layer(layers.panel); layer(layers.hud); }
+}
+
+// ---- 始める・やめる・操作
+// from: 始める番号（省くとビューアで読んでいた位置）
+async function startPlay(from) {
+  if (!items.length || play.mode === 'play') return;
+  const tStart = performance.now();
+  if (!initGL()) { toast('このブラウザでは再生を使えません（WebGL2 が必要です）', 5000); return; }
+  if (sceneAuto?.items !== items && items.length > 20000) {  // 大きいログは場面を調べるのに数秒かかる
+    toast('場面を調べています…', 0);
+    await new Promise(r => setTimeout(r, 50));
+  }
+  resetSlots();
+  Object.assign(play, {
+    back: play.mode === 'home' ? 'home' : 'viewer',
+    who: null, nameVis: 0, paused: false, needAll: true, t0: performance.now(), tint: [.25, .2, .5], perf: { t0: tStart, n: 0, max: 0, first: 0 },
+    nar: false, narLast: -2, narScroll: 0, talkVis: 0, narVis: 0,
+  });
+  $('plNarList').replaceChildren();
+  $('plTitle').textContent = logMeta.title;
+  const d = new Date(logMeta.savedAt), two = n => String(n).padStart(2, '0');
+  $('plSaved').hidden = isNaN(d);
+  if (!isNaN(d)) $('plDate').textContent = `${d.getFullYear()}/${two(d.getMonth() + 1)}/${two(d.getDate())}`;
+  document.activeElement?.blur();
+  $('home').hidden = true;
+  $('play').dataset.view = 'play';
+  $('play').hidden = false;
+  document.documentElement.classList.add('playing');
+  syncCtrl();
+  syncRec();
+  wake();
+  buildScene();
+  const at = from ?? topIndex();
+  // 選んだ Google Fonts は文字の範囲ごとに分かれているので、これから出す文字の分を先に取りに行く（待たない）
+  if (prefs.font) document.fonts?.load?.(`1em "${prefs.font}"`, items.slice(at, at + 40).map(it => it.body).join('').slice(0, 3000)).catch(() => {});
+  go(at);
+  look = structuredClone(lookTo);  // 始めは場面を寄せずにそのまま出す
+  play.mode = 'play';
+  runStage();
+  toast('クリック・→ で送る／スペースで一時停止／Esc で終了', 3500);
+}
+// 終えたら始めた画面へ戻る（play.back）。ビューアはどちらでも再生していたところへ動かしておく
+function stopPlay() {
+  stopRec();
+  stopStage();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  jump(play.i);
+  if (play.back === 'home') {
+    store.set(posKey, String(play.i));  // トップの「続きから」と読んだ件数も、再生していたところに合わせる
+    showHome();
+    return;
+  }
+  $('play').hidden = true;
+  document.documentElement.classList.remove('playing');
+}
+function runStage() {
+  if (play.on) return;
+  play.on = true;
+  play.last = performance.now();
+  play.raf = requestAnimationFrame(frame);
+}
+function stopStage() {
+  play.on = false;
+  play.mode = '';
+  cancelAnimationFrame(play.raf);
+}
+const toggleFull = () => document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : $('play').requestFullscreen?.().catch(() => {});
+
+// 操作が無いあいだは下のボタンとカーソルを隠す
+let idleTimer = 0;
+function wake() {
+  $('play').classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => $('play').classList.add('idle'), 2500);
+}
+$('btnPlay').onclick = () => startPlay();
+$('play').addEventListener('pointermove', wake);
+$('play').addEventListener('click', e => {
+  if (play.mode !== 'play') return;
+  // 隠れている下のボタンの所を押したときは、送らずにボタンを出すだけにする（一時停止のつもりで送ってしまわないように）
+  const r = $('plCtrl').getBoundingClientRect();
+  if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return wake();
+  advance();
+});
+$('plCtrl').addEventListener('click', e => {
+  // ボタンの絵（❚❚ ⇔ ▶）を描き替えると押した部品がページから外れ、画面のクリック（送る）と見分けられなくなるので、ここで止める
+  e.stopPropagation();
+  const b = e.target.closest('button');
+  if (!b) return;
+  ({
+    plPrev: back, plToggle: togglePause, plFwd: advance, plSpeed: cycleSpeed, plSceneBtn: openScene, plThemeBtn: () => toggleTheme(false), plFontBtn: openPrefs,
+    plRecBtn: toggleRec, plFull: toggleFull, plClose: stopPlay,
+  })[b.id]?.();
+  if (e.detail) b.blur();  // マウスで押したボタンに残ったフォーカスが、スペースキーを横取りしないように
+  wake();
+});
+addEventListener('keydown', e => {
+  if (play.mode !== 'play' || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
+  if (e.key === 'Escape') { if (!document.fullscreenElement) stopPlay(); return; }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('.pl-ctrl')) return;  // キーで選んだボタンはボタンとして押す
+  const act = { ' ': togglePause, Enter: advance, ArrowRight: advance, ArrowDown: advance, ArrowLeft: back, ArrowUp: back, f: toggleFull, F: toggleFull, r: toggleRec, R: toggleRec }[e.key];
+  if (!act) return;
+  e.preventDefault();
+  act();
+  wake();
+}, true);
+
+// ---- 場面の一覧と手直し（開くと一時停止する）
+const fillOptions = (id, entries) => $(id).append(...entries.map(([v, label]) => Object.assign(document.createElement('option'), { value: v, textContent: label })));
+fillOptions('scPlace', [...Object.entries(PLACES).map(([k, p]) => [k, p.label]), ['none', '分からない（大理石）']]);
+fillOptions('scTime', Object.entries(TIMES).map(([k, t]) => [k, t.label]));
+fillOptions('scWeather', Object.entries(WEATHERS).map(([k, w]) => [k, w === '晴れ' ? '晴れ（雨・雪を止める）' : w]));
+fillOptions('scLight', Object.entries(LIGHTS).map(([k, l]) => [k, l[0] + 'の光']));
+function openScene() {
+  play.paused = true;
+  syncCtrl();
+  renderScene();
+  $('scene').showModal();
+  $('scList').querySelector('.cur')?.scrollIntoView({ block: 'center' });
+}
+function renderScene() {
+  const ed = sceneEdits(), off = new Set(ed.off);
+  $('scNow').textContent = `#${pad(play.i + 1)} の場面: ${sceneLabel(sceneAt(play.i)) || '分からない（大理石）'}`;
+  // 場面が変わった手がかりと手で足したもの、それに外した手がかり（戻せるように）
+  const rows = scene.cues.filter(c => c.changed || c.manual !== undefined)
+    .concat(autoCues().filter(c => off.has(c.key)).map(c => ({ ...c, off: true })))
+    .sort((a, b) => a.i - b.i || (a.manual !== undefined) - (b.manual !== undefined));
+  let cur = -1;
+  rows.forEach((r, n) => { if (r.i <= play.i && !r.off) cur = n; });
+  $('scList').innerHTML = rows.map((r, n) => `<li class="${n === cur ? 'cur' : ''}${r.off ? ' off' : ''}">`
+    + `<span class="sc-no">#${pad(r.i + 1)}</span><span class="sc-what">${esc(cueLabel(r.set))}</span>`
+    + `<span class="sc-btns"><button class="btn" data-go="${r.i}">ここへ</button>`
+    + (r.manual !== undefined ? `<button class="btn" data-del="${r.manual}">消す</button>` : `<button class="btn" data-off="${esc(r.key)}">${r.off ? '戻す' : '外す'}</button>`)
+    + `</span><span class="sc-src">${esc(r.src)}</span></li>`).join('')
+    || '<li><span class="sc-src">場面の手がかりは見つかりませんでした。</span></li>';
+}
+function editScene(fn) {
+  const ed = sceneEdits();
+  fn(ed);
+  if (!saveSceneEdits(ed)) toast('このブラウザでは保存できないため、ページを閉じると元に戻ります', 4000);
+  buildScene();
+  setScene(play.i);
+  renderScene();
+}
+$('scAdd').onclick = () => {
+  const set = {};
+  for (const [id, k] of [['scPlace', 'place'], ['scTime', 'time'], ['scWeather', 'weather'], ['scLight', 'light']]) if ($(id).value) set[k] = $(id).value;
+  if (!Object.keys(set).length) return toast('変えるもの（場所・時間・天気・照明）を選んでください', 3000);
+  editScene(ed => ed.add.push({ i: play.i, set }));
+  ['scPlace', 'scTime', 'scWeather', 'scLight'].forEach(id => { $(id).value = ''; });
+};
+$('scene').addEventListener('click', e => {
+  if (e.target === $('scene')) return $('scene').close();
+  const b = e.target.closest('button[data-go], button[data-off], button[data-del]');
+  if (!b) return;
+  if (b.dataset.go) { $('scene').close(); go(+b.dataset.go, true); return; }
+  if (b.dataset.off) editScene(ed => { ed.off = ed.off.includes(b.dataset.off) ? ed.off.filter(k => k !== b.dataset.off) : [...ed.off, b.dataset.off]; });
+  if (b.dataset.del) editScene(ed => ed.add.splice(+b.dataset.del, 1));
+});
+
+// ---- 録画: HTML-in-Canvas のときは canvas をそのまま撮る（吹き出しも写り、下のボタンは写らない）。
+// 使えないときは画面の共有でこのタブを撮る（ブラウザが許可を聞く。重ねた HTML も写る）。MP4 が使えれば MP4、無ければ WebM
+let rec = null;   // { mr（MediaRecorder）, t0 }
+const clock = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+async function toggleRec() {
+  if (rec) return stopRec();
+  if (typeof MediaRecorder !== 'function') return toast('このブラウザでは録画できません', 4000);
+  let stream;
+  try {
+    stream = hic ? $('stage').captureStream(30)
+      : await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false, preferCurrentTab: true, selfBrowserSurface: 'include' });
+  } catch (e) { console.warn(e); return toast('録画を始められませんでした', 4000); }
+  const type = ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+  let mr;
+  try { mr = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 10e6 }); } catch (e) {
+    console.warn(e);
+    stream.getTracks().forEach(t => t.stop());
+    return toast('録画を始められませんでした', 4000);
+  }
+  const chunks = [], from = play.i;
+  mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  mr.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(chunks, { type: mr.mimeType || type || 'video/webm' });
+    if (!blob.size) return toast('録画が空でした', 4000);
+    saveBlob(blob, `${fileSafe(logMeta.title)}_${pad(from + 1)}-${pad(play.i + 1)}.${/mp4/.test(blob.type) ? 'mp4' : 'webm'}`);
+    toast('録画を保存しました', 3000);
+  };
+  stream.getVideoTracks()[0]?.addEventListener('ended', stopRec);  // 画面の共有をブラウザ側で止めたとき
+  mr.start(1000);
+  rec = { mr, t0: performance.now() };
+  if (play.paused) togglePause();  // 録画を始めたら再生する
+  syncRec();
+}
+function stopRec() {
+  if (!rec) return;
+  const { mr } = rec;
+  rec = null;
+  if (mr.state !== 'inactive') mr.stop();
+  syncRec();
+}
+function syncRec() {
+  $('plRec').hidden = !rec;
+  $('plRecBtn').classList.toggle('on', !!rec);
+  $('plRecBtn').textContent = rec ? '■ 停止' : '● 録画';
+  if (rec) $('plRecTime').textContent = '00:00';
+}
+const fileSafe = s => (s || 'talk').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
+function saveBlob(blob, name) {
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+// ---------- トップ（概要・使い方・ビューア・再生モード・更新履歴） ----------
+// 背景・紋章（吹き出しの形の枠。概要は主役の立ち絵）・大きな文字（#hmDeco）・概要の吹き出しは再生と同じ canvas に描く。
+// 目次・見出し・日付・右の列のパネル（hparts）は、HTML-in-Canvas が使えるときは canvas に描き（置き場所 .hm-slot に合わせる）、
+// 使えないときは置き場所の中の HTML のまま。中央のページの本文とボタン（#home の .hm-main）はいつも canvas の上の HTML。
+// 起動するとまずここを出す（URL に #viewer を付けるとビューアから始める）。ログを開くとビューアへ（「再生」から選んだときは再生へ）
+const VERSION = '2.0';
+const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを上に足す
+  ['2.0', '2026-10-27', [
+    'トップページ（概要・使い方・ビューア・再生モード・更新履歴）。読み込んだログの登場人物・続きの発言・主役の立ち絵を出す',
+    '再生モード: 立ち絵つきの掛け合い、話す人の側の吹き出し、画面の中央を流れる地の文、一時停止・送る・戻る・速さ（トップでも選べる）・全画面。終えると始めた画面（トップかビューア）に戻る',
+    '場面: 地の文とト書きの言葉から場所・時間・天気・照明を推し量り、背景を変える（一覧で外す・手で足す）',
+    '録画: 再生のようすを動画で保存',
+    '表示: ☀ / ☾ のボタンで配色（ライト・ダーク。トップと再生で別々）を、「Aa」で再生のフォントを Google Fonts の日本語フォントから選べる',
+    'トップ: どのページにも吹き出しの形の紋章（番号・漢字・英語。概要は主役の立ち絵と名前）とページごとの差し色。HTML-in-Canvas が使えるときは目次・見出し・パネルも canvas に描き、溶けながら出てくる',
+    '起動したときの読み込み中の表示。シェーダーは裏で組み立て、フォントの CSS は表示を止めずに読み込む',
+    'フォント: Overused Grotesk（RandomMaerks、SIL Open Font License 1.1）と Zen Kaku Gothic New（Google Fonts）をトップと再生の表示に',
+    '登場人物で立ち絵を選べるように',
+    'HTML-in-Canvas（Chrome で試験中の機能）に対応。使えないブラウザでは HTML を重ねて表示',
+  ]],
+  ['1.1', '2026-10-08', ['フォルダの中のログを一覧から切り替え', '前回のフォルダと、最後に読んだログを覚えて開く']],
+  ['1.0', '2026-10-08', ['talklog の HTML を zeta のトーク画面に近い見た目で表示', 'アイコン（avatars/ に置く・登場人物で選ぶ）', '吹き出しのテーマ・文字の大きさ・読んだ位置の記憶']],
+];
+// [番号, 大きな漢字（概要は主役の名前。目次の札は「話」）, 英語, 差し色（概要は主役の立ち絵の色があればそれ）, 紋章の枠の角ばらせる角（0 = 左上・1 = 右上）]
+const HOME_SECS = {
+  overview: ['00', '話', 'MAIN CAST', [240, 146, 66], 0],
+  howto: ['01', '使', 'HOW TO USE', [124, 102, 240], 0],
+  viewer: ['02', '読', 'VIEWER', [92, 142, 255], 1],
+  play: ['03', '演', 'PLAYBACK', [236, 92, 172], 0],
+  log: ['04', '歴', 'CHANGELOG', [78, 198, 178], 1],
+};
+const inkOn = c => .299 * c[0] + .587 * c[1] + .114 * c[2] > 165 ? '#141416' : '#fff';  // 差し色の上に置く文字の色
+// 目次の札はページごとの色（概要の札は主役の色に変わる）
+function tintNav(sec, c = HOME_SECS[sec][3]) {
+  const b = $('hmNavBox').querySelector(`button[data-sec="${sec}"]`), v = `rgb(${c.join(',')})`;
+  if (b.style.getPropertyValue('--c') === v) return;
+  b.style.setProperty('--c', v);
+  b.style.setProperty('--c-ink', inkOn(c));
+  touch(hpart('nav'));
+}
+Object.keys(HOME_SECS).forEach(sec => tintNav(sec));
+let homeNow = 'overview', pendingPlay = 0, clockSec = -1, homeCast = [];
+// 紋章: 吹き出しの形の枠。概要では主役（いちばん多く話すキャラ）の立ち絵かアイコンを枠の形に切って入れる。
+// cx・cy（真ん中）・hw・hh（半分の大きさ）は CSS の px（layout で決める）、a は濃さ、p は立ち絵が出てくる進み、ck は角ばらせる角（0 左上〜1 右上）、col は枠の色（0〜1）
+const emblem = { name: null, started: false, tok: 0, t: null, p: 1, cx: 0, cy: 0, hw: 0, hh: 0, a: 0, ck: 0, ckTo: 0, col: [.48, .4, .94], colTo: [.48, .4, .94] };
+$('hmVer').textContent = VERSION;
+$('hmYear').textContent = new Date().getFullYear();
+$('hmHist').innerHTML = CHANGELOG.map(([v, d, list]) => `<li><span class="v">${v}</span><span class="d">${d}</span>`
+  + `<ul>${list.map(x => `<li>${esc(x)}</li>`).join('')}</ul></li>`).join('');
+
+// 動きを減らす設定のときは、出てくる動き・数え上げ・打ち込み・回転・流れを止めて、出来上がった形で出す
+const reduceMq = matchMedia('(prefers-reduced-motion: reduce)'), still = () => reduceMq.matches;
+// トップの動き（それぞれの部品が自分の役を演じる）: NOW LOADED の数が数え上がる、CAST の棒が伸びてときどき息をする、
+// 吹き出しに続きの発言を 1 字ずつ打ち込む。HTML を書き換えた部品だけ touch で写し直す（止まっている部品は写し直さない）
+const homeAnim = { countN: 0, countT: 0, barsT: 0, lines: [], li: 0, typed: 0, nextAt: 0 };
+function stepHome(now) {
+  const A = homeAnim, s = still(), ease = k => 1 - (1 - Math.min(1, Math.max(0, k))) ** 3;
+  const big = A.countT && $('hmCur').querySelector('.hm-big');
+  if (big) {
+    const k = s ? 1 : (now - A.countT) / 1100, txt = Math.round(A.countN * ease(k)).toLocaleString();
+    if (big.textContent !== txt) { big.textContent = txt; touch(hpart('cur'), big); }
+    if (k >= 1) A.countT = 0;
+  }
+  if (A.barsT) {
+    // 最初の 2 秒で 0 から伸び、あとは 8 秒ごとに上から順に少し縮んで戻る
+    const t = (now - A.barsT) / 1000;
+    let moved = false;
+    $('hmCast').querySelectorAll('b[data-w]').forEach((b, i) => {
+      const ph = (t - 2) % 8 - i * .08;
+      const f = s ? 1 : t < 2 ? ease((t - .3 - i * .08) / .8) : 1 - .28 * Math.sin(Math.PI * Math.min(1, Math.max(0, ph / .9)));
+      const v = (b.dataset.w * f).toFixed(1) + '%';
+      if (b.style.width !== v) { b.style.width = v; moved = true; }
+    });
+    if (moved) touch(hpart('cast'));
+  }
+  if (A.lines.length && homeNow === 'overview' && now >= A.nextAt) {
+    // 吹き出し: 1 字 45〜70ms で打ち、2.6 秒見せたら消して次の発言へ
+    const line = A.lines[A.li % A.lines.length];
+    if (A.typed < line.chars.length) {
+      A.typed = s ? line.chars.length : A.typed + 1;
+      A.nextAt = now + (s ? 6000 : A.typed < line.chars.length ? 45 + Math.random() * 25 : 2600);
+    } else {
+      A.li = (A.li + 1) % A.lines.length;
+      A.typed = 0;
+      A.nextAt = now + 380;
+    }
+    const cur = A.lines[A.li % A.lines.length];
+    $('hmChipName').textContent = cur.name;
+    $('hmChipText').textContent = cur.chars.slice(0, A.typed).join('');
+    touch(layers.chip, $('hmChipText'));
+  }
+}
+// トップを出したとき・ページを替えたときの出方。重ねる方式は CSS（.home.in）、HTML-in-Canvas は部品ごとの t0 から溶かして出す
+function homeIntro() {
+  const now = performance.now(), s = still();
+  hparts.forEach(P => { P.t0 = s ? 0 : now + 120 + P.order * 80; });
+  navChkAt = now + 1400;  // 目次が出そろってから、押せるかを確かめる
+  const h = $('home');
+  h.classList.remove('in');
+  void h.offsetWidth;
+  requestAnimationFrame(() => h.classList.add('in'));
+}
+
+function showHome(sec = homeNow) {
+  const ok = initGL();
+  if (play.mode === 'play') stopPlay();
+  play.mode = 'home';
+  $('play').dataset.view = 'home';
+  $('home').hidden = false;
+  $('play').hidden = false;
+  document.documentElement.classList.add('playing');
+  lookTo = lookOf(SCENE0);
+  look = structuredClone(lookTo);
+  Object.assign(play, { t0: performance.now(), needAll: true });
+  renderHome();
+  homeSec(sec);
+  homeIntro();
+  showMode();
+  if (ok) runStage();
+}
+function leaveHome() {
+  pendingPlay = 0;
+  if (play.mode !== 'home') return;
+  stopStage();
+  $('home').hidden = true;
+  $('play').hidden = true;
+  document.documentElement.classList.remove('playing');
+}
+function homeSec(sec) {
+  if (!HOME_SECS[sec]) sec = 'overview';
+  homeNow = sec;
+  const [no, kanji, en, , corner] = HOME_SECS[sec], ov = sec === 'overview', main = mainName();
+  // 目次は HTML-in-Canvas のとき canvas の中にあるので、#home ではなく目次そのものから探す
+  $('hmNavBox').querySelectorAll('button[data-sec]').forEach(b => b.setAttribute('aria-current', String(b.dataset.sec === sec)));
+  $('home').querySelectorAll('.hm-sec').forEach(s => s.classList.toggle('on', s.dataset.sec === sec));
+  $('home').querySelector('.hm-hero').classList.toggle('ov', ov);
+  const nb = $('hmNavBox').querySelector(`button[data-sec="${sec}"]`);
+  $('hmHNo').textContent = 'PAGE ' + no;
+  $('hmHTitle').textContent = nb.querySelector('span').textContent;
+  $('hmHEn').textContent = nb.querySelector('b').textContent;
+  $('hmDeco').classList.toggle('ov', ov);
+  $('hmNo').textContent = no;
+  setKanji(ov ? main || 'TALKLOG' : kanji);
+  $('hmEn').textContent = ov ? (main ? en : 'WELCOME') : en;
+  $('home').querySelector('.hm-secs').scrollTop = 0;
+  emblem.ckTo = corner;
+  homeAccent();
+  play.decoEnter = 0;  // 大きな文字を入れ替えて、ずれながら入ってくる
+  play.pulse = 1;
+  hpart('head').t0 = still() ? 0 : performance.now();  // 見出しも溶かして出し直す
+  touch(layers.deco);
+  touch(hpart('head'), $('hmHTitle'));
+  touch(hpart('nav'));
+}
+// トップの差し色: ページの色。概要は主役の立ち絵から取った色（無ければページの色）
+let accentTok = 0, mainCol = { name: '', c: null };  // mainCol: 主役の色（立ち絵から取る。立ち絵を変えたら取り直す）
+function homeAccent() {
+  const sec = homeNow, main = mainName(), tok = ++accentTok, known = main && mainCol.name === main ? mainCol.c : null;
+  setHomeAccent((sec === 'overview' && known) || HOME_SECS[sec][3]);
+  tintNav('overview', known || undefined);
+  if (!main || known) return;
+  colorOf(main, false).then(c => {
+    mainCol = { name: main, c };
+    tintNav('overview', c);
+    if (sec === 'overview' && tok === accentTok && play.mode === 'home') setHomeAccent(c);
+  });
+}
+function setHomeAccent(c) {
+  play.tintTo = c.map(v => v / 255);
+  emblem.colTo = c.map(v => v / 255);
+  const v = `rgb(${c.join(',')})`;
+  if ($('play').style.getPropertyValue('--h-acc') === v) return;
+  $('play').style.setProperty('--h-acc', v);
+  $('play').style.setProperty('--h-acc-ink', inkOn(c));
+  touchAll();
+}
+// 話した数の多い順の登場人物 [{ name, count, right }]。主役はいちばん多く話すキャラ（自分の側は除く）
+function castCounts() {
+  const m = new Map();
+  for (const it of items) {
+    if (isNarration(it) || it.kind === 'info') continue;
+    const c = m.get(it.name) || { name: it.name, count: 0, right: !!it.right };
+    c.count++;
+    m.set(it.name, c);
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count);
+}
+const mainName = () => (homeCast.find(c => !c.right) || {}).name || '';
+// 右の列（NOW LOADED・CAST・NEXT LINES）と左の状態、概要の STATUS、再生モードのボタンを、いまのログに合わせる
+function renderHome() {
+  const read = rows ? Math.min(items.length - 1, parseInt(store.get(posKey), 10) || 0) : 0;
+  homeCast = rows ? castCounts() : [];
+  const main = mainName(), info = rows && `${items.length.toLocaleString()}件 · ${(read + 1).toLocaleString()}件目まで読んだ`;
+  $('hmState').textContent = rows ? 'LOADED' : 'READY';
+  $('hmStateSub').textContent = rows ? info : 'ログを開いてください';
+  $('hmCur').innerHTML = rows
+    ? `<b class="hm-big">${items.length.toLocaleString()}</b><span class="hm-sub">ITEMS · ${Math.round((read + 1) / items.length * 100)}% READ</span>`
+      + `<p><b>${esc(logMeta.title)}</b></p><p class="hm-sub">${logMeta.savedAt ? esc(fmtDate(logMeta.savedAt)) + ' 保存' : ''}</p>`
+    : '<p class="hm-sub">まだログを開いていません。この画面にドロップするか、ファイル・フォルダを選んでください。</p>';
+  const max = homeCast[0]?.count || 1;
+  $('hmCast').innerHTML = homeCast.slice(0, 6).map(c => { const w = (c.count / max * 100).toFixed(1); return `<li><span>${esc(c.name)}</span><i><b data-w="${w}" style="width:${w}%"></b></i><em>${c.count.toLocaleString()}</em></li>`; }).join('')
+    || '<li class="hm-none">ログを開くと、話した数の多い順に出ます。</li>';
+  $('hmTalk').innerHTML = (rows ? items.slice(read, read + 3) : []).map(it => {
+    const nar = isNarration(it), info = it.kind === 'info';
+    return `<li class="${nar ? 'nar' : info ? 'info' : it.right ? 'me' : 'them'}"><b>${esc(nar ? '地の文' : info ? 'INFO' : it.name)}</b>`
+      + `<span>${esc(it.body.replace(/\*/g, '').replace(/\s+/g, ' ').slice(0, 90))}</span></li>`;
+  }).join('')
+    || '<li class="hm-none">ログを開くと、読んでいた位置の続きが出ます。</li>';
+  const restore = savedDir && !lib ? `<button class="btn" data-act="restore">前回のフォルダ「${esc(savedDir.name)}」</button>` : '';
+  $('hmHero').innerHTML = rows
+    ? `<b class="hm-big">${esc(logMeta.title)}</b><p class="hm-sub">${info}${main ? ' · 主役 ' + esc(main) : ''}</p>`
+      + '<div class="hm-acts"><button class="btn primary" data-act="viewer">続きから読む</button><button class="btn" data-act="play">▶ 続きから再生</button>'
+      + '<button class="btn" data-act="play0">最初から再生</button><button class="btn" data-act="lib">ログを切り替える</button></div>' + speedHtml()
+    : '<b class="hm-big">NO LOG</b><p class="hm-sub">talklog で保存した HTML をこの画面にドロップするか、選んでください。</p>'
+      + `<div class="hm-acts"><button class="btn primary" data-act="pick">ファイルを選ぶ</button><button class="btn" data-act="dir">フォルダを選ぶ</button>${restore}</div>`;
+  for (const a of ['play', 'play0', 'cast']) $('home').querySelector(`[data-sec="play"] [data-act="${a}"]`).hidden = !rows;
+  $('hmPlaySpeed').innerHTML = speedHtml();
+  $('hmPlayNote').textContent = rows ? `「${logMeta.title}」を続きから、または最初から再生します。ほかのログを選んで再生することもできます。` : '選んだログを読み込んだら、そのまま再生を始めます。';
+  const r = $('home').querySelector('[data-sec="viewer"] [data-act="restore"]');
+  r.hidden = !restore;
+  if (restore) r.textContent = `前回のフォルダ「${savedDir.name}」を開く`;
+  setEmblem(main);
+  if (homeNow === 'overview') {
+    setKanji(main || 'TALKLOG');
+    $('hmEn').textContent = main ? HOME_SECS.overview[2] : 'WELCOME';
+    touch(layers.deco);
+    if (play.mode === 'home') homeAccent();
+  }
+  // 吹き出しの台詞と、数え上げ・棒の動きを始め直す
+  const clean = t => t.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
+  homeAnim.lines = (rows ? items.slice(read, read + 60).filter(it => it.kind !== 'info' && !isNarration(it) && clean(it.body)).slice(0, 6) : [])
+    .map(it => { const c = Array.from(clean(it.body)); return { name: it.name, chars: c.length > 34 ? [...c.slice(0, 33), '…'] : c }; });
+  if (!homeAnim.lines.length) {
+    homeAnim.lines = [['TALKLOG', 'talklog の HTML をここにドロップしてください'], ['PLAYBACK', '立ち絵つきで 1 件ずつ再生します'], ['SCENE', '雨の音がしている。店内はピンクの光。']]
+      .map(([name, t]) => ({ name, chars: Array.from(t) }));
+  }
+  const now = performance.now();
+  Object.assign(homeAnim, { countN: rows ? items.length : 0, countT: rows ? now + 500 : 0, barsT: now, li: 0, typed: 0, nextAt: now + 900 });
+  $('hmChipName').textContent = homeAnim.lines[0].name;
+  $('hmChipText').textContent = '';
+  touch(layers.chip);
+  touch(hpart('cur'));
+  touch(hpart('cast'));
+  touch(hpart('talk'));
+  touch(hpart('nav'));
+}
+// 大きな文字。概要の主役の名前は、1 行に収まるよう文字の幅の目安（--kw、em）で大きさを決める（CSS の .hm-deco.ov .hm-kanji）
+function setKanji(t) {
+  $('hmKanji').textContent = t;
+  $('hmKanji').style.setProperty('--kw', (widthOf(t) * .64).toFixed(2));
+}
+// 文字の幅の目安（全角は 1.6、ほかは 1）
+const widthOf = s => Array.from(s).reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/.test(c) ? 1.6 : 1), 0);
+function setEmblem(name) {
+  if (!gl || (name === emblem.name && emblem.started)) return;
+  Object.assign(emblem, { name, started: true, t: null });
+  const tok = ++emblem.tok;
+  if (name) texFor(name).then(t => { if (tok === emblem.tok) Object.assign(emblem, { t, p: 0 }); });
+}
+// ログを読み込んだ後: 「再生モード」から選んだときは再生へ、それ以外はビューアへ（起動時に裏で開いたときはトップのまま）
+function afterLoad(quiet) {
+  renderHome();
+  if (pendingPlay && Date.now() - pendingPlay < 600000) { pendingPlay = 0; startPlay(); return; }
+  if (!quiet) leaveHome();
+}
+function tickHome() {
+  const d = new Date(), s = d.getSeconds();
+  if (s === clockSec) return;
+  clockSec = s;
+  const two = n => String(n).padStart(2, '0'), wd = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][d.getDay()];
+  $('hmClock').innerHTML = `${two(d.getMonth() + 1)}.${two(d.getDate())}<em>${wd}</em>`
+    + `<small>${d.getFullYear()} · ${two(d.getHours())}:${two(d.getMinutes())}:${two(s)}</small>`;
+  touch(hpart('date'), $('hmClock').lastElementChild);
+}
+// 目次と左下のボタンは HTML-in-Canvas のとき canvas の中にあるので、#play で受ける
+$('play').addEventListener('click', e => {
+  if (play.mode !== 'home') return;
+  const nav = e.target.closest('.hm-nav button[data-sec]');
+  if (nav) return homeSec(nav.dataset.sec);
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === 'pickplay' || act === 'dirplay') pendingPlay = Date.now();
+  ({
+    pick: pickFile, dir: pickDir, restore: restoreDir, viewer: leaveHome, lib: openLib,
+    pickplay: pickFile, dirplay: pickDir, play: () => startPlay(), play0: () => startPlay(0), cast: () => openCast(),
+    speed: () => setSpeed(+b.dataset.v), theme: () => toggleTheme(true), font: openPrefs,
+  })[act]?.();
+  if (e.detail) b.blur?.();
+});
+
+// ---- 再生とトップの表示設定（配色は ☀ / ☾ のボタンで切り替え、フォントは「Aa」の一覧から）
+// フォントは選んだときに Google Fonts の CSS を読み込む（つながっていなければ端末のフォントのまま）。標準は端末のフォントで、外へは取りに行かない
+const FONTS = [  // [Google Fonts の名前, 太さ, 説明]
+  ['', '', '標準'],
+  ['Noto Sans JP', 'wght@400;700;900', 'ゴシック'],
+  ['Zen Kaku Gothic New', 'wght@400;700;900', 'すっきりしたゴシック'],
+  ['M PLUS Rounded 1c', 'wght@400;700;900', '丸ゴシック'],
+  ['Zen Maru Gothic', 'wght@400;700;900', 'やわらかい丸ゴシック'],
+  ['Kiwi Maru', 'wght@400;500', '丸みのある明朝'],
+  ['Noto Serif JP', 'wght@400;700;900', '明朝'],
+  ['Shippori Mincho', 'wght@400;700;800', '上品な明朝'],
+  ['Hina Mincho', '', '細い明朝'],
+  ['Kaisei Decol', 'wght@400;700', '飾りのある明朝'],
+  ['Klee One', 'wght@400;600', '硬筆の手書き風'],
+  ['Yomogi', '', '手書き風'],
+  ['RocknRoll One', '', 'ポップ'],
+  ['Dela Gothic One', '', '極太'],
+  ['DotGothic16', '', 'ドット'],
+];
+const BASE_FONT = '"Pretendard","Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",system-ui,sans-serif';
+const fontStack = name => (name ? `"${name}", ` : '') + BASE_FONT;
+const fontLinks = new Set();
+function loadFont(name) {
+  const f = FONTS.find(x => x[0] === name);
+  if (!name || !f || fontLinks.has(name)) return;
+  fontLinks.add(name);
+  document.head.append(Object.assign(document.createElement('link'), {
+    rel: 'stylesheet', href: `https://fonts.googleapis.com/css2?family=${name.replace(/ /g, '+')}${f[1] ? ':' + f[1] : ''}&display=swap`,
+  }));
+}
+function applyPrefs() {
+  $('play').dataset.theme = prefs.theme;
+  $('play').dataset.hlook = prefs.homeTheme;
+  // ☀ / ☾ のボタンは、いまの配色の方を濃く出す（トップと再生で別々に覚える）
+  for (const [b, v] of [[$('hmNavBox').querySelector('.tg'), prefs.homeTheme], [$('plThemeBtn'), prefs.theme]]) {
+    b.dataset.on = v;
+    b.title = v === 'light' ? 'ダーク表示にする' : 'ライト表示にする';
+    b.setAttribute('aria-label', b.title);
+  }
+  loadFont(prefs.font);
+  if (prefs.font) $('play').style.setProperty('--pl-font', fontStack(prefs.font));
+  else $('play').style.removeProperty('--pl-font');
+  touchAll();
+}
+function toggleTheme(home) {
+  const k = home ? 'homeTheme' : 'theme';
+  prefs[k] = prefs[k] === 'light' ? 'dark' : 'light';
+  store.set(home ? HOME_THEME_KEY : PLAY_THEME_KEY, prefs[k]);
+  applyPrefs();
+}
+// フォントは読み込み終わると字の形が変わるので、そのときも写し直す
+document.fonts?.addEventListener?.('loadingdone', () => touchAll());
+function openPrefs() {
+  FONTS.forEach(([n]) => loadFont(n));  // 見本を出すため、選べるフォントをまとめて読み込む
+  renderPrefs();
+  $('plPrefs').showModal();
+}
+function renderPrefs() {
+  $('ppFonts').innerHTML = FONTS.map(([n, , note]) => `<li><button role="radio" data-font="${esc(n)}" aria-checked="${n === prefs.font}">`
+    + `<span class="pp-name">${esc(n || '端末のフォント')} · ${esc(note)}</span>`
+    + `<span class="pp-sample" style="font-family:${esc(fontStack(n))}">「……遅かったね。」雨の音がしている。</span></button></li>`).join('');
+}
+$('ppFonts').addEventListener('click', e => {
+  const b = e.target.closest('[data-font]');
+  if (!b) return;
+  prefs.font = b.dataset.font;
+  store.set(FONT_KEY, prefs.font);
+  applyPrefs();
+  renderPrefs();
+});
+$('plPrefs').addEventListener('click', e => { if (e.target === $('plPrefs')) $('plPrefs').close(); });
+applyPrefs();
+$('file').addEventListener('cancel', () => { pendingPlay = 0; });
+$('btnHome').onclick = () => showHome();
+
+// ---------- 小物 ----------
+function showError(msg) { $('err').textContent = msg; $('err').hidden = !msg; }
+function fail(msg) { toast(''); if (rows || play.mode === 'home') toast(msg, 6000); else showError(msg); }
+
+let toastEl = null, toastTimer = 0;
+function toast(msg, ms = 3000) {
+  clearTimeout(toastTimer);
+  if (!msg) { toastEl?.remove(); toastEl = null; return; }
+  if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'toast'; document.body.append(toastEl); }
+  toastEl.textContent = msg;
+  toastEl.classList.remove('out');
+  if (ms) toastTimer = setTimeout(() => { toastEl?.classList.add('out'); toastTimer = setTimeout(() => toast(''), 300); }, ms);
+}
+
+function fmtDate(s) {
+  const d = new Date(s);
+  return isNaN(d) ? '' : d.toLocaleString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function hash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+function colorFor(name) {
+  return `hsl(${parseInt(hash(name), 36) % 360} 24% 34%)`;
+}
+
+// 起動したらトップを出す（URL に #viewer を付けたときはビューアから）
+if (!/^#viewer\b/.test(location.hash)) showHome();
+else bootDone();
+// フォント（トップの見出しと本文）を待つ。つながらないときは待ちすぎない
+{
+  const css = $('zkCss');
+  const sheet = css.media === 'all' ? Promise.resolve() : new Promise(r => { css.addEventListener('load', r); css.addEventListener('error', r); });
+  Promise.race([
+    sheet.then(() => Promise.all([document.fonts.load('700 1em "Overused Grotesk"'), document.fonts.load('900 1em "Zen Kaku Gothic New"', '話使読演歴概要')])),
+    new Promise(r => setTimeout(r, navigator.onLine === false ? 0 : 1500)),
+  ]).catch(() => {}).then(() => { boot.fonts = true; bootCheck(); });
+}
+})();
+</script>
+</body>
+</html>

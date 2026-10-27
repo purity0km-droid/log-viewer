@@ -1,0 +1,7 @@
+# 公開する（GitHub Pages に出す）のは index.html と README.txt だけ。
+# avatars/ の画像は個人のもの、HANDOFF.md・CODEMAP.md・log/ は開発メモ、dist/ は配布用 zip なので入れない
+/*
+!/.gitignore
+!/.nojekyll
+!/index.html
+!/README.txt
