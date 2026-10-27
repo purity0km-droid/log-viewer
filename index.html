@@ -7,6 +7,8 @@
      file:// とほかのオリジンでは効かない（そのときはフラグを有効にした Chrome だけ） -->
 <meta http-equiv="origin-trial" content="AuzsUyutxjVkPFDXcPB7rcu9OiPv/s83joLH8x+te8YwJavmwjNHE+dQ0Nia78m5v9wjYqIo69BvfIs5LoEgYw0AAAByeyJvcmlnaW4iOiJodHRwczovL3B1cml0eTBrbS1kcm9pZC5naXRodWIuaW86NDQzIiwiZmVhdHVyZSI6IkhUTUxJbkNhbnZhcyIsImV4cGlyeSI6MTgwMzk0NTYwMCwiaXNTdWJkb21haW4iOnRydWV9">
 <title>Talklog Viewer</title>
+<!-- タブのアイコン: トップの左上のロゴと同じ、左上だけ角ばらせた吹き出しに点 3 つ（色は再生の紫 ACCENT）。index.html 1 枚で動くよう、ファイルにせず埋め込む -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 4H20A11 11 0 0 1 31 15V17A11 11 0 0 1 20 28H12A11 11 0 0 1 1 17V6A2 2 0 0 1 3 4Z' fill='%23644ed7'/%3E%3Cg fill='%23fff'%3E%3Ccircle cx='10' cy='16' r='2.4'/%3E%3Ccircle cx='16' cy='16' r='2.4'/%3E%3Ccircle cx='22' cy='16' r='2.4'/%3E%3C/g%3E%3C/svg%3E">
 <!-- トップと再生の表示に使うフォント（つながっていなければ端末のフォント）。
      Overused Grotesk: RandomMaerks、SIL Open Font License 1.1（https://github.com/RandomMaerks/Overused-Grotesk）。英字の見出し・数字に使う
      Zen Kaku Gothic New: Google Fonts（SIL Open Font License 1.1）。トップの日本語に使う -->
@@ -2923,6 +2925,7 @@ const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを�
   ['2.1', '2026-10-28', [
     'ビューア: 上部のボタンで吹き出しの色（3 色の見本）と文字の大きさ（Aa）を選べるように。スマホ幅では登場人物を人の形のアイコンに',
     '再生: HTML-in-Canvas で吹き出しの本文が出ないことがあったのを直した',
+    'タブのアイコン（ロゴと同じ吹き出しの形）',
   ]],
   ['2.0', '2026-10-27', [
     'トップページ（概要・使い方・ビューア・再生モード・更新履歴）。読み込んだログの登場人物・続きの発言・主役の立ち絵を出す',
