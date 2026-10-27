@@ -57,6 +57,15 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:rgba
 .btn.big{padding:9px 20px;font-size:14px}
 .btn.primary{background:var(--accent);border-color:transparent;color:#fff}
 .btn.primary:hover{background:#8a78f3}
+/* 吹き出しの色（3 色の見本から選ぶ。狭い画面では選んでいる色だけ出し、押すと次の色）と「Aa」（文字の大きさ）。再生の ☀ / ☾・Aa と同じ並び */
+.vt{display:flex;align-items:center;gap:2px;padding:3px}
+.vt button{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:999px;background:none;opacity:.45}
+.vt button::before{content:"";width:14px;height:14px;border-radius:2px 8px 8px 8px;background:linear-gradient(135deg,var(--them-bg) 50%,var(--me-bg) 50%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.3)}
+.vt button:hover{opacity:.8}
+.vt button[aria-checked="true"]{opacity:1;background:rgba(127,127,127,.28)}
+.btn.aa{font-weight:700;letter-spacing:.02em}
+/* 狭い画面だけアイコンにする（登場人物は人の形） */
+.btn .narrow{display:none;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;vertical-align:-3px}
 
 /* トーク */
 .log{max-width:760px;margin:0 auto;padding:22px 14px 140px;font-size:calc(var(--log-fs) * var(--scale))}
@@ -455,6 +464,9 @@ html[data-boot="off"] .boot{display:none}
   :root{--av:34px;--gap:8px;--head:52px;--log-fs:14.5px}
   .tools{gap:4px}
   .wide{display:none}
+  .btn .narrow{display:inline-block}
+  .vt [aria-checked="false"]{display:none}
+  .tools .btn:not(.vt){padding:6px 8px}
   .pl-hud .pl-count b{font-size:22px}
   .pl-date{font-size:15px}
   .pl-panel{max-width:calc(100vw - 32px)}
@@ -478,8 +490,9 @@ html[data-boot="off"] .boot{display:none}
     <div class="tools">
       <button class="btn" id="btnHome" title="トップ（使い方・更新履歴）へ">トップ</button>
       <button class="btn" id="btnPlay" title="今の位置から再生" hidden>▶<span class="wide"> 再生</span></button>
-      <button class="btn" id="btnPrefs">表示</button>
-      <button class="btn" id="btnCast" hidden>登場人物</button>
+      <div class="btn vt" id="vtheme" role="radiogroup" aria-label="吹き出しの色"><button role="radio" data-tp="basic" aria-checked="false" title="吹き出しの色: ベーシック" aria-label="ベーシック"></button><button role="radio" data-tp="oreo" aria-checked="false" title="吹き出しの色: オレオ" aria-label="オレオ"></button><button role="radio" data-tp="taro" aria-checked="false" title="吹き出しの色: タロ" aria-label="タロ"></button></div>
+      <button class="btn aa" id="btnPrefs" title="文字の大きさ" aria-label="文字の大きさ">Aa</button>
+      <button class="btn" id="btnCast" title="登場人物" aria-label="登場人物" hidden><svg class="narrow" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.2" r="2.7"/><path d="M2.8 14c.4-3 2.5-4.6 5.2-4.6s4.8 1.6 5.2 4.6"/></svg><span class="wide">登場人物</span></button>
       <button class="btn" id="btnOpen">開く</button>
     </div>
   </div>
@@ -903,17 +916,22 @@ $('toEnd').onclick = () => jump(rows.length - 1, 'end');
 $('btnPrefs').onclick = () => $('prefs').showModal();
 $('prefs').addEventListener('click', e => { if (e.target === $('prefs')) $('prefs').close(); });
 
+// 吹き出しのテーマは、表示設定の見本（#themes）と上部の色のボタン（#vtheme）のどちらからでも選べる
+const THEMES = ['basic', 'oreo', 'taro'];
 function setTheme(theme) {
-  if (!['basic', 'oreo', 'taro'].includes(theme)) theme = 'basic';
+  if (!THEMES.includes(theme)) theme = 'basic';
   document.documentElement.dataset.theme = theme;
-  $('themes').querySelectorAll('[data-tp]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.tp === theme)));
+  document.querySelectorAll('#themes [data-tp], #vtheme [data-tp]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.tp === theme)));
 }
 setTheme(store.get(THEME_KEY));
-$('themes').addEventListener('click', e => {
+for (const g of [$('themes'), $('vtheme')]) g.addEventListener('click', e => {
   const b = e.target.closest('[data-tp]');
   if (!b) return;
-  setTheme(b.dataset.tp);
-  store.set(THEME_KEY, b.dataset.tp);
+  // 上部のボタンで選んでいる色を押したら次の色へ（狭い画面では選んでいる色だけを出している）
+  const cur = document.documentElement.dataset.theme;
+  const t = g === $('vtheme') && b.dataset.tp === cur ? THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length] : b.dataset.tp;
+  setTheme(t);
+  store.set(THEME_KEY, t);
 });
 
 function setFontSize(fs, keepPlace) {
@@ -2900,8 +2918,12 @@ function saveBlob(blob, name) {
 // 目次・見出し・日付・右の列のパネル（hparts）は、HTML-in-Canvas が使えるときは canvas に描き（置き場所 .hm-slot に合わせる）、
 // 使えないときは置き場所の中の HTML のまま。中央のページの本文とボタン（#home の .hm-main）はいつも canvas の上の HTML。
 // 起動するとまずここを出す（URL に #viewer を付けるとビューアから始める）。ログを開くとビューアへ（「再生」から選んだときは再生へ）
-const VERSION = '2.0';
+const VERSION = '2.1';
 const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを上に足す
+  ['2.1', '2026-10-28', [
+    'ビューア: 上部のボタンで吹き出しの色（3 色の見本）と文字の大きさ（Aa）を選べるように。スマホ幅では登場人物を人の形のアイコンに',
+    '再生: HTML-in-Canvas で吹き出しの本文が出ないことがあったのを直した',
+  ]],
   ['2.0', '2026-10-27', [
     'トップページ（概要・使い方・ビューア・再生モード・更新履歴）。読み込んだログの登場人物・続きの発言・主役の立ち絵を出す',
     '再生モード: 立ち絵つきの掛け合い、話す人の側の吹き出し、画面の中央を流れる地の文、一時停止・送る・戻る・速さ（トップでも選べる）・全画面。終えると始めた画面（トップかビューア）に戻る',
@@ -3127,7 +3149,7 @@ function renderHome() {
   homeAnim.lines = (rows ? items.slice(read, read + 60).filter(it => it.kind !== 'info' && !isNarration(it) && clean(it.body)).slice(0, 6) : [])
     .map(it => { const c = Array.from(clean(it.body)); return { name: it.name, chars: c.length > 34 ? [...c.slice(0, 33), '…'] : c }; });
   if (!homeAnim.lines.length) {
-    homeAnim.lines = [['TALKLOG', 'talklog の HTML をここにドロップしてください'], ['PLAYBACK', '立ち絵つきで 1 件ずつ再生します'], ['SCENE', '雨の音がしている。店内はピンクの光。']]
+    homeAnim.lines = [['TALKLOG', 'talklog の HTML をここにドロップしてください'], ['PLAYBACK', '立ち絵つきで 1 件ずつ再生します'], ['SCENE', 'ログの記載に合わせて、背景を自動で切り替えます']]
       .map(([name, t]) => ({ name, chars: Array.from(t) }));
   }
   const now = performance.now();
