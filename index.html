@@ -292,10 +292,11 @@ html[data-boot="off"] .boot{display:none}
   --h-font:"Overused Grotesk","Zen Kaku Gothic New","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif}
 .play[data-hlook="dark"]{--h-ink:#ececf0;--h-sub:#9d9ca4;--h-panel:rgba(18,17,22,.78);--h-line:rgba(255,255,255,.14);--h-soft:rgba(255,255,255,.08);--h-bub:#232325;
   --h-acc-t:color-mix(in srgb,var(--h-acc) 78%,#fff)}
-/* .home は押せる所（中央のページ・置き場所の中身）だけ押せるようにし、ほかは下の canvas（目次など）へ通す */
+/* .home は押せる所（中央のページ・置き場所の中身・右の列）だけ押せるようにし、ほかは下の canvas（目次など）へ通す。
+   右の列はスクロールするので列ごと受ける（中のパネルは inert で、触ると canvas へ抜けてスクロールしない） */
 .home{position:absolute;inset:0;z-index:2;display:grid;grid-template-columns:clamp(200px,17vw,260px) minmax(0,1fr) clamp(240px,22vw,330px);gap:22px;padding:20px 22px;
   color:var(--h-ink);font:14px/1.6 var(--h-font);user-select:text;-webkit-user-select:text;pointer-events:none}
-.home .hm-main,.home .hm-slot>*{pointer-events:auto}
+.home .hm-main,.home .hm-side,.home .hm-slot>*{pointer-events:auto}
 .hm-part{box-sizing:border-box;color:var(--h-ink);font:14px/1.6 var(--h-font)}
 .hm-slot>.hm-part{width:100%}
 .hm-slot[data-slot="nav"]{min-height:0}
@@ -431,7 +432,7 @@ html[data-boot="off"] .boot{display:none}
 .hm-deco.ov .hm-en{order:-1;padding:2px 10px;border-radius:2px 9px 9px 9px;background:var(--h-acc);color:var(--h-acc-ink);font:700 11px/1.5 var(--hud-font);letter-spacing:.24em;text-indent:0}
 .hm-deco.ov .hm-kanji{max-width:46vw;font-size:min(clamp(64px,9vw,170px),max(40px,calc(41vw / var(--kw,4))));line-height:.95;color:var(--d-ink);-webkit-text-stroke:.07em var(--d-paper);paint-order:stroke fill;letter-spacing:.02em;white-space:normal;overflow-wrap:anywhere;text-align:center}  /* 縁取りで、暗い立ち絵の上でも読める */
 @media (max-width:860px){
-  .home{grid-template-columns:minmax(0,1fr);grid-template-rows:none;grid-auto-rows:max-content;gap:14px;padding:14px;overflow:auto}
+  .home{grid-template-columns:minmax(0,1fr);grid-template-rows:none;grid-auto-rows:max-content;gap:14px;padding:14px;overflow:auto;pointer-events:auto}  /* .home ごとスクロールするので、余白や隙間を触っても動くように全体で受ける */
   /* 狭い画面の目次は札だけを横に並べる（名前は title と aria-label で） */
   .hm-nav{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px}
   .hm-brand{width:100%;margin-bottom:2px;padding-bottom:10px}
@@ -1801,6 +1802,7 @@ function layoutParts(home) {
   const clipOf = sel => { const r = $('home').querySelector(sel).getBoundingClientRect(); return [r.top - pr.top, r.bottom - pr.top]; };
   const clipMain = home && clipOf('.hm-main'), clipSide = home && clipOf('.hm-side');
   for (const P of hparts) {
+    if (home && P.live && !P.dom && innerWidth <= 860) partToDom(P);  // 狭い画面は .home 全体が触れるのを受けるので、下の canvas に描いた目次には届かない
     if (P.dom) continue;
     if (!home) {
       P.alpha = 0;
@@ -2926,6 +2928,7 @@ const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを�
     'ビューア: 上部のボタンで吹き出しの色（3 色の見本）と文字の大きさ（Aa）を選べるように。スマホ幅では登場人物を人の形のアイコンに',
     '再生: HTML-in-Canvas で吹き出しの本文が出ないことがあったのを直した',
     'タブのアイコン（ロゴと同じ吹き出しの形）',
+    'トップ: スマホ幅で、紋章や右の列のパネルの上を触るとスクロールできなかったのを直した',
   ]],
   ['2.0', '2026-10-27', [
     'トップページ（概要・使い方・ビューア・再生モード・更新履歴）。読み込んだログの登場人物・続きの発言・主役の立ち絵を出す',
