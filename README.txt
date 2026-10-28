@@ -86,3 +86,15 @@ jpg・jpeg・webp・gif も使えます。120px 前後の正方形の画像が�
 ・Overused Grotesk（RandomMaerks、SIL Open Font License 1.1）https://github.com/RandomMaerks/Overused-Grotesk
 ・Zen Kaku Gothic New（Google Fonts、SIL Open Font License 1.1）
 どちらもインターネットから読み込んで使い、この zip には入っていません。
+
+
+■ 利用条件
+・だれでも無料で使えます。
+・このビューアで表示・録画した画面（スクリーンショット・動画）は、自由に使えます。
+  （写っているログや画像の扱いは、それぞれの決まりに従ってください。）
+・このビューア（index.html・zip）の再配布と、手を加えたものの公開はお断りします。
+  紹介するときは、公開ページ https://purity0km-droid.github.io/log-viewer/ を案内してください。
+・使ったことで起きた問題について、作者は責任を負えません。
+・フォントは、上のとおりそれぞれのライセンス（SIL Open Font License 1.1）に従います。
+
+© 2026 purity0km-droid
