@@ -84,7 +84,10 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:rgba
 
 /* トーク */
 .log{max-width:760px;margin:0 auto;padding:22px 14px 140px;font-size:calc(var(--log-fs) * var(--scale))}
-.msg{display:grid;grid-template-columns:var(--av) minmax(0,1fr);column-gap:var(--gap);margin:0 0 28px;scroll-margin-top:calc(var(--head) + 14px);content-visibility:auto;contain-intrinsic-size:auto 150px}
+/* content-visibility は発言ではなく、発言を CHUNK 件ずつ入れた箱（.ck）に付ける。高さの見積もりは箱ごとに JS が書く。
+   15 万件の発言そのものに付けると、毎コマ全件が画面に入るかを調べ直し、再生もトップも 4fps ほどに落ちた（2026-10-28） */
+.ck{content-visibility:auto}
+.msg{display:grid;grid-template-columns:var(--av) minmax(0,1fr);column-gap:var(--gap);margin:0 0 28px;scroll-margin-top:calc(var(--head) + 14px)}
 .col{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
 .msg.me{grid-template-columns:minmax(0,1fr) var(--av)}
 .msg.me .av{grid-column:2;grid-row:1}
@@ -295,6 +298,21 @@ html[data-boot="off"] .boot{display:none}
 .boot b em{font-style:normal;opacity:.5}
 .boot span{font-size:12px;letter-spacing:.06em;opacity:.6}
 @media (prefers-reduced-motion:reduce){.boot-bub i{animation:none;opacity:.8}}
+/* 大きなログを開いているあいだの表示（点は .boot と同じ）。点と棒の動きは transform と opacity だけなので、重い処理の最中も止まらない。
+   出してから 0.15 秒は見せない（すぐ終わる読み込みでちらつかない） */
+.busy{position:fixed;inset:0;z-index:65;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:rgba(233,236,236,.94);color:#16161a;transition:opacity .3s;animation:busyIn .25s .15s both}
+.busy.dark{background:rgba(11,11,13,.94);color:#ececf0}
+.busy[hidden]{display:none}
+.busy.out{opacity:0}
+.busy b{max-width:min(560px,calc(100vw - 48px));overflow:hidden;font-size:15px;font-weight:700;letter-spacing:.04em;white-space:nowrap;text-overflow:ellipsis}
+.busy span{font-size:12px;letter-spacing:.06em;opacity:.6;font-variant-numeric:tabular-nums}
+.busy-bar{width:min(240px,60vw);height:3px;overflow:hidden;border-radius:2px;background:color-mix(in srgb,currentColor 14%,transparent)}
+.busy-bar i{display:block;height:100%;background:#7b66f0;transform-origin:left;transform:scaleX(var(--p,0));transition:transform .2s}
+.busy-bar.wait i{width:30%;transform:none;animation:busyWait 1.2s ease-in-out infinite}
+@keyframes busyIn{from{opacity:0}}
+@keyframes busyWait{from{translate:-100% 0}to{translate:340% 0}}
+@media (prefers-reduced-motion:reduce){.busy-bar.wait i{animation:none;width:100%;opacity:.4}}
+html.busy-on{overflow:hidden}
 
 /* トップ（概要・使い方・ビューア・再生モード・更新履歴）。左に目次（ページごとの色の札を並べたドック）、中央に見出しと紋章とページ、右に小さなパネル。
    形は zeta の吹き出しと同じく「しっぽ側の角だけ角ばらせた角丸」でそろえる（紋章の枠・目次の札・パネル・ボタン）。
@@ -502,6 +520,7 @@ html[data-boot="off"] .boot{display:none}
 </head>
 <body>
 <div class="boot" id="boot" role="status" aria-live="polite"><div class="boot-bub" aria-hidden="true"><i></i><i></i><i></i></div><b>TALKLOG <em>VIEWER</em></b><span id="bootMsg">準備しています</span></div>
+<div class="busy" id="busy" role="status" aria-live="polite" hidden><div class="boot-bub" aria-hidden="true"><i></i><i></i><i></i></div><b id="busyTitle"></b><div class="busy-bar" aria-hidden="true"><i id="busyBar"></i></div><span id="busyMsg"></span></div>
 <header class="bar">
   <div class="bar-in">
     <div class="ttl"><span id="title">Talklog Viewer</span><span id="meta" class="meta"></span></div>
@@ -745,12 +764,17 @@ let openToken = 0;
 async function openFile(file, entryName = '', quiet = false) {
   const t = ++openToken;
   showError('');
-  toast('読み込み中…', 0);
-  await new Promise(r => setTimeout(r, 30));
+  if (!quiet) busy('ログを読み込んでいます', null, file.name.replace(/\.[^.]+$/, ''));
+  await frameOut();  // 読み込み中の表示を描いてから重い処理に入る
   let data = null;
-  try { data = parseTalklog(await file.text()); } catch (e) { console.error(e); }
+  try {
+    const text = await file.text();
+    if (!quiet && text.length > 2e6 && t === openToken) { busy('発言を読み取っています'); await frameOut(); }
+    data = parseTalklog(text);
+  } catch (e) { console.error(e); }
   if (t !== openToken) return false;  // 読み込み中に別のログが選ばれた
   if (!data || !data.items.length) {
+    busy(null);
     fail('talklog のトークが見つかりませんでした。talklog で保存した HTML（または JSON）を選んでください。');
     return false;
   }
@@ -858,21 +882,106 @@ function show(data, fallbackTitle, quiet = false) {
   logMeta = { title, savedAt: data.savedAt };
 
   const box = $('log');
-  box.innerHTML = data.items.map(msgHtml).join('');
-  rows = box.children;
+  box.replaceChildren();
+  rows = box.getElementsByClassName('msg');
   updateAvatarCss();
   resolveAvatars(token);
 
   posKey = POS_KEY + hash(title + '\0' + data.items.slice(0, 3).map(i => i.body).join('\0'));
   const saved = parseInt(store.get(posKey), 10) || 0;
-  if (saved > 0 && saved < rows.length) {
-    jump(saved);
-    toast(`前回の続き（${(saved + 1).toLocaleString()}件目）から表示しています`, 4000);
-  } else {
-    jump(0);
-    toast('');
-  }
+  // 発言は描く合間に少しずつ入れ（logJob）、入れ終えたら前回の位置へ動かす。ビューアを見ているあいだは読み込み中の表示を出す
+  built = false;
+  pendingJump = saved > 0 && saved < items.length ? [saved, 'start', true] : [0, 'start', false];
+  toast('');
+  idleRun('log', logJob(token));
+  idleRun('scene', sceneJob);
   afterLoad(quiet);
+}
+
+// ---------- 発言を入れる（CHUNK 件ずつの箱にまとめ、content-visibility は箱に付ける。CSS の .ck） ----------
+// 箱の高さは文の長さからの見積もり（一度描いた箱は auto で実際の高さを覚える）
+const CHUNK = 200;
+let built = true, pendingJump = null, logDone = 0;   // built: 全件入れ終えた。logDone: 入れ終えた件数
+const estH = it => 64 + 27 * Math.ceil(Math.max(1, it.body.length) / 36);
+function chunkHtml(from) {
+  let s = '', h = 0;
+  for (let i = from, to = Math.min(items.length, from + CHUNK); i < to; i++) { s += msgHtml(items[i]); h += estH(items[i]); }
+  return `<div class="ck" style="contain-intrinsic-size:auto ${h}px">${s}</div>`;
+}
+// ビューアを見ているときは 1 回に 40ms ほど進めて読み込み中の表示を更新し、トップや再生の裏では 1 コマの合間に収まる分だけ。
+// 1 回に入れる箱の数は、入れるのにかかった時間（HTML を組む＋DOM にする）から決める（組む時間だけで区切ると、DOM にするのに 0.1 秒以上かかった）
+let msPerChunk = 3;
+function logJob(token) {
+  logDone = 0;
+  return end => {
+    if (token !== loadToken) return true;
+    const fg = $('play').hidden, t0 = performance.now();
+    const n = Math.max(1, Math.floor((fg ? 40 : end - t0) / msPerChunk));
+    let html = '', k = 0;
+    for (; k < n && logDone < items.length; k++) { html += chunkHtml(logDone); logDone = Math.min(items.length, logDone + CHUNK); }
+    $('log').insertAdjacentHTML('beforeend', html);
+    msPerChunk = msPerChunk * .7 + .3 * Math.max(.3, (performance.now() - t0) / k);
+    if (logDone < items.length) { if (fg) busyLog(); return false; }
+    built = true;
+    if ($('play').hidden) showLog();  // トップや再生の裏で入れ終えたときは、ビューアを出すときに動かす（leaveHome・stopPlay）
+    return true;
+  };
+}
+// ビューアへ戻ったときに、まだ入れている途中なら読み込み中の表示を出す。入れ終えていたら、待っていた位置へ動かす
+const busyLog = () => { if (!built) busy('発言を並べています', logDone / items.length, logMeta.title); else showLog(); };
+function showLog() {
+  busy(null);
+  if (!pendingJump) return;
+  const [i, block, note] = pendingJump;
+  pendingJump = null;
+  jump(i, block);
+  if (note) toast(`前回の続き（${(i + 1).toLocaleString()}件目）から表示しています`, 4000);
+}
+
+// 裏の仕事（発言を入れる・場面の手がかりを探す）は描く合間（requestIdleCallback）に少しずつ進める。
+// 仕事は end（この時刻までに切り上げる）を受け取り、終わったら true を返す。ビューアを見ているときは発言から、ほかは場面から
+const idleJobs = new Map();
+let idleId = 0;
+const ric = f => window.requestIdleCallback ? requestIdleCallback(f, { timeout: 250 }) : setTimeout(f, 16);
+function idleRun(name, job) {
+  idleJobs.set(name, job);
+  if (!idleId) idleId = ric(idleTick);
+}
+function idleTick(dl) {
+  idleId = 0;
+  const end = performance.now() + Math.max(3, Math.min(12, dl?.timeRemaining?.() ?? 8));
+  const names = $('play').hidden ? ['log', 'scene'] : ['scene', 'log'];
+  for (const name of names) {
+    const job = idleJobs.get(name);
+    if (job && job(end)) idleJobs.delete(name);
+    if (performance.now() >= end) break;
+  }
+  if (idleJobs.size) idleId = ric(idleTick);
+}
+// 次のコマが描かれるまで待つ（タブが裏にあって描かれないときも 100ms で進む）
+const frameOut = () => new Promise(r => { requestAnimationFrame(() => setTimeout(r, 0)); setTimeout(r, 100); });
+
+// ---------- 読み込み中の表示（#busy）。msg が null で消す。p は 0〜1 の進み具合（null は待っている動き） ----------
+let busyTok = 0;
+function busy(msg, p = null, title) {
+  const el = $('busy'), t = ++busyTok;
+  if (msg == null) {
+    if (el.hidden) return;
+    el.classList.add('out');
+    document.documentElement.classList.remove('busy-on');
+    setTimeout(() => { if (t === busyTok) el.hidden = true; }, 300);
+    return;
+  }
+  if (el.hidden || el.classList.contains('out')) {
+    el.classList.toggle('dark', !(play.mode === 'home' && prefs.homeTheme === 'light'));
+    el.classList.remove('out');
+    el.hidden = false;
+    document.documentElement.classList.add('busy-on');
+  }
+  if (title !== undefined) $('busyTitle').textContent = title;
+  $('busyMsg').textContent = p == null ? msg : `${msg} ${Math.floor(p * 100)}%`;
+  $('busyBar').parentElement.classList.toggle('wait', p == null);
+  if (p != null) $('busyBar').style.setProperty('--p', Math.max(0, Math.min(1, p)).toFixed(3));
 }
 
 // ジャンプ後の位置合わせは、ユーザーが操作したら打ち切る
@@ -880,8 +989,12 @@ let settleId = 0;
 const cancelSettle = () => settleId++;
 ['wheel', 'touchstart', 'mousedown', 'keydown'].forEach(t => addEventListener(t, cancelSettle, { capture: true, passive: true }));
 
+// 発言を入れ終える前は、入れ終えたときに動かす（pendingJump）。入れ終えた後に動かしたら、待っていた位置は捨てる
 function jump(i, block = 'start') {
-  if (!rows || !rows.length) return;
+  if (!rows) return;
+  if (!built) { pendingJump = [i, block]; return; }
+  pendingJump = null;
+  if (!rows.length) return;
   i = Math.max(0, Math.min(rows.length - 1, i | 0));
   const el = rows[i], edge = block === 'end' ? 'bottom' : 'top';
   el.scrollIntoView({ block });
@@ -898,6 +1011,8 @@ function jump(i, block = 'start') {
   requestAnimationFrame(settle);
 }
 
+// 読んでいるところ: ビューアの上端の発言。まだビューアを動かしていない（発言を入れている途中か、入れ終えてからビューアを出していない）ときは、動かす先
+const readAt = () => pendingJump ? Math.min(items.length - 1, pendingJump[0]) : built ? topIndex() : 0;
 // 画面上端にある発言の番号（二分探索）
 function topIndex() {
   const y = document.querySelector('.bar').offsetHeight + 4;
@@ -913,7 +1028,7 @@ function topIndex() {
 let ticking = false, saveTimer = 0, pendingSave = null, fabTimer = 0;
 const flushSave = () => { clearTimeout(saveTimer); pendingSave?.(); };
 addEventListener('scroll', () => {
-  if (!rows) return;
+  if (!rows || !built) return;
   $('fab').classList.remove('idle');
   clearTimeout(fabTimer);
   fabTimer = setTimeout(() => $('fab').classList.add('idle'), 1800);
@@ -933,7 +1048,7 @@ addEventListener('scroll', () => {
 $('pos').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 $('pos').addEventListener('change', e => { if (Number.isFinite(e.target.valueAsNumber)) jump(e.target.valueAsNumber - 1); });
 $('toTop').onclick = () => { cancelSettle(); scrollTo(0, 0); };
-$('toEnd').onclick = () => jump(rows.length - 1, 'end');
+$('toEnd').onclick = () => jump(items.length - 1, 'end');
 
 // ---------- 表示設定（吹き出しのテーマ・文字の大きさ） ----------
 $('btnPrefs').onclick = () => $('prefs').showModal();
@@ -959,7 +1074,7 @@ for (const g of [$('themes'), $('vtheme')]) g.addEventListener('click', e => {
 
 function setFontSize(fs, keepPlace) {
   if (!['xs', 's', 'm', 'l'].includes(fs)) fs = 'm';
-  const i = keepPlace && rows ? topIndex() : -1;
+  const i = keepPlace && rows && built ? topIndex() : -1;
   document.documentElement.dataset.fs = fs;
   for (const g of [$('fs'), $('ppFs')]) g.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.fs === fs)));
   if (i >= 0 && scrollY > 0) jump(i);  // 読んでいた発言が画面上端に残るように
@@ -1973,16 +2088,18 @@ const SCENE_CUES = [
 ];
 const SCENE0 = { place: null, time: null, weather: null, light: null, dim: 1, neon: false };
 
-let sceneAuto = null, scene = null;   // sceneAuto: { items, cues }（ログごとに 1 回）。scene: { cues, states }（外した・足した分を入れたもの）
+// sceneAuto: { items, cues, next }（ログごとに。next 件目の手前まで探した）。scene: { cues, states, known }（外した・足した分を入れたもの。known 件目の手前まで場面が分かる）
+let sceneAuto = null, scene = null;
 const descOf = it => it.kind === 'info' ? '' : isNarration(it) ? it.body : (it.body.match(/\*[^*]+\*/g) || []).join(' ');
 const snippet = (t, at, len) => { const s = Math.max(0, at - 14); return (s ? '…' : '') + t.slice(s, at + len + 18).replace(/\*/g, '').replace(/\s+/g, ' ') + '…'; };
-function autoCues() {
-  if (sceneAuto?.items === items) return sceneAuto.cues;
-  const rx = new RegExp(SCENE_CUES.map(([s]) => `(${s})`).join('|'), 'g'), cues = [];
-  items.forEach((it, i) => {
-    const text = descOf(it);
-    if (!text) return;
-    for (const m of text.matchAll(rx)) {
+const SCENE_RX = new RegExp(SCENE_CUES.map(([s]) => `(${s})`).join('|'), 'g');
+const sceneSrc = () => sceneAuto?.items === items ? sceneAuto : (sceneAuto = { items, cues: [], next: 0 });
+// 手がかりを先頭から順に探す（until の時刻を過ぎたら切り上げる）。探し終えたら true。瑞（15 万件）でも全部で 0.3 秒ほど
+function scanCues(until) {
+  const a = sceneSrc();
+  while (a.next < items.length) {
+    const i = a.next++, text = descOf(items[i]);
+    if (text) for (const m of text.matchAll(SCENE_RX)) {
       // すぐ後ろに「ような・みたい」が続くのはたとえ話（「施術台に押さえつけられたような」）なので数えない
       if (/^[^。、\n]{0,14}?(?:ような|ように|みたい|かのよう)/.test(text.slice(m.index + m[0].length, m.index + m[0].length + 20))) continue;
       let set = SCENE_CUES[m.findIndex((g, n) => n > 0 && g !== undefined) - 1][1];
@@ -1991,11 +2108,23 @@ function autoCues() {
         if (!w) continue;
         set = { light: w[1] };
       }
-      cues.push({ i, key: i + ':' + m.index, set, src: snippet(text, m.index, m[0].length) });
+      a.cues.push({ i, key: i + ':' + m.index, set, src: snippet(text, m.index, m[0].length) });
     }
-  });
-  sceneAuto = { items, cues };
-  return cues;
+    if ((i & 127) === 127 && performance.now() > until) break;
+  }
+  return a.next >= items.length;
+}
+// 全部の手がかり（場面の一覧を出すとき。まだなら残りをいま探す）
+function autoCues() { scanCues(Infinity); return sceneAuto.cues; }
+// 裏で探す（idleRun）。再生中は、いまの発言の場面が分かったとき・探し終えたとき・0.5 秒ごと（「調べています」の割合）に場面を作り直す
+let sceneShown = 0;
+function sceneJob(end) {
+  const done = scanCues(end);
+  if (play.mode === 'play' && scene) {
+    const now = performance.now(), reach = play.i < sceneAuto.next && play.i >= scene.known;
+    if (done || reach || now - sceneShown > 500) { sceneShown = now; buildScene(); setScene(play.i, false); }
+  }
+  return done;
 }
 const sceneKey = () => SCENE_KEY + posKey.slice(POS_KEY.length);
 function sceneEdits() {
@@ -2006,8 +2135,8 @@ function sceneEdits() {
 const saveSceneEdits = ed => store.set(sceneKey(), JSON.stringify(ed));
 // 自動の手がかり（外したものを除く）と手で足したものを並べ、手がかりごとの「その後の場面」を作る
 function buildScene() {
-  const ed = sceneEdits(), off = new Set(ed.off);
-  const cues = autoCues().filter(c => !off.has(c.key))
+  const ed = sceneEdits(), off = new Set(ed.off), a = sceneSrc();
+  const cues = a.cues.filter(c => !off.has(c.key))
     .concat(ed.add.map((a, n) => ({ i: a.i, set: a.set, manual: n, src: '手で足した場面' })))
     .sort((a, b) => a.i - b.i || (a.manual !== undefined) - (b.manual !== undefined));
   const mem = {}, states = [], keys = ['place', 'time', 'weather', 'light', 'dim', 'neon'];
@@ -2017,7 +2146,7 @@ function buildScene() {
     c.changed = !!c.set.flash || keys.some(k => next[k] !== st[k]);  // 一覧には場面が変わったものだけ出す
     states.push(st = next);
   }
-  scene = { cues, states };
+  scene = { cues, states, known: a.next >= items.length ? Infinity : a.next };
 }
 function applyCue(st, set, mem) {
   const s = { ...st };
@@ -2042,18 +2171,22 @@ function lastCue(i) {
   while (lo <= hi) { const mid = (lo + hi) >> 1; if (scene.cues[mid].i <= i) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
   return ans;
 }
-const sceneAt = i => { const k = lastCue(i); return k >= 0 ? scene.states[k] : SCENE0; };
+// まだ手がかりを探していない所は null（分からない）
+const sceneAt = i => { if (i >= scene.known) return null; const k = lastCue(i); return k >= 0 ? scene.states[k] : SCENE0; };
 const sceneLabel = st => [PLACES[st.place]?.label, TIMES[st.time]?.label, WEATHERS[st.weather], st.light && LIGHTS[st.light][0] + 'の光'].filter(Boolean).join(' · ');
 function cueLabel(set) {
   return [set.place && (PLACES[set.place]?.label || '場所なし'), TIMES[set.time]?.label, WEATHERS[set.weather], set.light && LIGHTS[set.light][0] + 'の光',
     set.flash && '稲光', set.neon && 'ネオン', set.dim < 1 && '暗い', set.dim > 1 && '明るい'].filter(Boolean).join(' · ');
 }
-// i 件目の場面を見た目の目標にする（look はここへ毎フレーム少しずつ寄っていく）
-function setScene(i) {
-  const k = lastCue(i), st = k >= 0 ? scene.states[k] : SCENE0;
-  lookTo = lookOf(st);
-  for (let j = k; j >= 0 && scene.cues[j].i === i; j--) if (scene.cues[j].set.flash) play.flash = 1;
-  $('plSceneLbl').textContent = 'SCENE · ' + (sceneLabel(st) || '—');
+// i 件目の場面を見た目の目標にする（look はここへ毎フレーム少しずつ寄っていく）。
+// まだ手がかりを探していない所は大理石のまま「調べています」と出し、分かったら寄せる。enter: その発言へ移ったとき（稲光を出す）
+function setScene(i, enter = true) {
+  const st = sceneAt(i);
+  lookTo = lookOf(st || SCENE0);
+  if (enter && st) for (let j = lastCue(i); j >= 0 && scene.cues[j].i === i; j--) if (scene.cues[j].set.flash) play.flash = 1;
+  const lbl = 'SCENE · ' + (st ? sceneLabel(st) || '—' : `調べています ${Math.floor(scene.known / items.length * 100)}%`);
+  if ($('plSceneLbl').textContent === lbl) return;
+  $('plSceneLbl').textContent = lbl;
   touch(layers.hud);
 }
 // 場所が分からないときは大理石だけ（天気は全面に出す）。屋内の雨・雪は窓と、手前にうっすら
@@ -2731,11 +2864,8 @@ function render(time) {
 async function startPlay(from) {
   if (!items.length || play.mode === 'play') return;
   const tStart = performance.now();
+  busy(null);  // 大きいログは、発言を入れ終えるのと場面の手がかりを探すのを待たずに始める（裏で続ける）
   if (!initGL()) { toast('このブラウザでは再生を使えません（WebGL2 が必要です）', 5000); return; }
-  if (sceneAuto?.items !== items && items.length > 20000) {  // 大きいログは場面を調べるのに数秒かかる
-    toast('場面を調べています…', 0);
-    await new Promise(r => setTimeout(r, 50));
-  }
   resetSlots();
   Object.assign(play, {
     back: play.mode === 'home' ? 'home' : 'viewer',
@@ -2755,8 +2885,9 @@ async function startPlay(from) {
   syncCtrl();
   syncRec();
   wake();
+  sceneShown = performance.now();
   buildScene();
-  const at = from ?? topIndex();
+  const at = from ?? readAt();
   // 選んだ Google Fonts は文字の範囲ごとに分かれているので、これから出す文字の分を先に取りに行く（待たない）
   if (prefs.font) document.fonts?.load?.(`1em "${prefs.font}"`, items.slice(at, at + 40).map(it => it.body).join('').slice(0, 3000)).catch(() => {});
   go(at);
@@ -2778,6 +2909,7 @@ function stopPlay() {
   }
   $('play').hidden = true;
   document.documentElement.classList.remove('playing');
+  busyLog();
 }
 function runStage() {
   if (play.on) return;
@@ -2840,6 +2972,9 @@ fillOptions('scLight', Object.entries(LIGHTS).map(([k, l]) => [k, l[0] + 'の光
 function openScene() {
   play.paused = true;
   syncCtrl();
+  autoCues();  // 一覧には全部の手がかりが要るので、裏で探している途中なら残りをいま探す
+  buildScene();
+  setScene(play.i, false);
   renderScene();
   $('scene').showModal();
   $('scList').querySelector('.cur')?.scrollIntoView({ block: 'center' });
@@ -2945,8 +3080,13 @@ function saveBlob(blob, name) {
 // 目次・見出し・日付・右の列のパネル（hparts）は、HTML-in-Canvas が使えるときは canvas に描き（置き場所 .hm-slot に合わせる）、
 // 使えないときは置き場所の中の HTML のまま。中央のページの本文とボタン（#home の .hm-main）はいつも canvas の上の HTML。
 // 起動するとまずここを出す（URL に #viewer を付けるとビューアから始める）。ログを開くとビューアへ（「再生」から選んだときは再生へ）
-const VERSION = '2.2';
+const VERSION = '2.3';
 const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを上に足す
+  ['2.3', '2026-10-28', [
+    'ビューア: 発言の多いログ（十数万件など）を速く開けるように。開いているあいだは進み具合を表示',
+    'トップ・再生: 発言の多いログを開いていると、動きが重くなったのを修正',
+    '再生: 大きなログでも場面を調べ終えるのを待たずに始め、場面は再生しながら調べるように',
+  ]],
   ['2.2', '2026-10-28', [
     '再生: 「Aa」で文字の大きさも選べるように（ビューアと共通）',
     '再生: 吹き出しと地の文の文字を少し細く（Windows で太字のように見えていたため）',
@@ -3077,6 +3217,7 @@ function leaveHome() {
   $('home').hidden = true;
   $('play').hidden = true;
   document.documentElement.classList.remove('playing');
+  if (rows) busyLog();
 }
 function homeSec(sec) {
   if (!HOME_SECS[sec]) sec = 'overview';
