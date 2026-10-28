@@ -1,7 +1,8 @@
-# 公開する（GitHub Pages に出す）のは index.html と README.txt だけ。
+# 公開する（GitHub Pages に出す）のは index.html・README.txt と、SNS のカードの画像 ogp.png だけ（画像の元 ogp/ と make-ogp.ps1 は入れない）。
 # avatars/ の画像は個人のもの、HANDOFF.md・CODEMAP.md・log/ は開発メモ、dist/ は配布用 zip なので入れない
 /*
 !/.gitignore
 !/.nojekyll
 !/index.html
 !/README.txt
+!/ogp.png

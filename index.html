@@ -7,6 +7,19 @@
      file:// とほかのオリジンでは効かない（そのときはフラグを有効にした Chrome だけ） -->
 <meta http-equiv="origin-trial" content="AuzsUyutxjVkPFDXcPB7rcu9OiPv/s83joLH8x+te8YwJavmwjNHE+dQ0Nia78m5v9wjYqIo69BvfIs5LoEgYw0AAAByeyJvcmlnaW4iOiJodHRwczovL3B1cml0eTBrbS1kcm9pZC5naXRodWIuaW86NDQzIiwiZmVhdHVyZSI6IkhUTUxJbkNhbnZhcyIsImV4cGlyeSI6MTgwMzk0NTYwMCwiaXNTdWJkb21haW4iOnRydWV9">
 <title>Talklog Viewer</title>
+<meta name="description" content="talklog（zeta のトークを保存する非公式ツール）で保存した HTML を、トーク画面に近い見た目で読み返したり、立ち絵つきで自動再生したりできるビューア。ログはブラウザの中だけで読み、どこにも送信しません。">
+<!-- SNS に貼ったときのカード（OGP）。画像は公開ページの ogp.png（元は ogp/ogp.html、make-ogp.ps1 で作る。リポジトリには ogp.png だけ入れる） -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Talklog Viewer">
+<meta property="og:title" content="Talklog Viewer">
+<meta property="og:description" content="talklog で保存したトークを、トーク画面に近い見た目で読み返す・立ち絵つきで再生するビューア。ログはブラウザの中だけで読みます（zeta 非公式）。">
+<meta property="og:url" content="https://purity0km-droid.github.io/log-viewer/">
+<meta property="og:image" content="https://purity0km-droid.github.io/log-viewer/ogp.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Talklog Viewer — 保存したトークを、読み返す。再生する。">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
 <!-- タブのアイコン: トップの左上のロゴと同じ、左上だけ角ばらせた吹き出しに点 3 つ（色は再生の紫 ACCENT）。index.html 1 枚で動くよう、ファイルにせず埋め込む -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 4H20A11 11 0 0 1 31 15V17A11 11 0 0 1 20 28H12A11 11 0 0 1 1 17V6A2 2 0 0 1 3 4Z' fill='%23644ed7'/%3E%3Cg fill='%23fff'%3E%3Ccircle cx='10' cy='16' r='2.4'/%3E%3Ccircle cx='16' cy='16' r='2.4'/%3E%3Ccircle cx='22' cy='16' r='2.4'/%3E%3C/g%3E%3C/svg%3E">
 <!-- トップと再生の表示に使うフォント（つながっていなければ端末のフォント）。
