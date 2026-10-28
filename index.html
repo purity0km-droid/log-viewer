@@ -249,6 +249,9 @@ html.playing{overflow:hidden}
 .play.idle{cursor:none}
 /* 再生の表示のフォント（吹き出し・地の文・大きな名前）。表示設定で Google Fonts から選ぶ */
 .pl-panel,.pl-nar-list,.pl-name-big{font-family:var(--pl-font,inherit)}
+/* 再生の本文は少し細く（350 = Windows では Yu Gothic UI Semilight）。半透明の吹き出しの上や canvas に写す文字は ClearType が効かず、
+   400 だと太字のように見えた（2026-10-28 ユーザーが見本から選んだ）。350 の無い Google Fonts では 400 で出る */
+.pl-text,.pl-nar-list{font-weight:350}
 /* 明るい表示（参考動画寄り: 白い大理石に墨色の文字）。吹き出しはキャラが白・自分が墨色 */
 .play[data-theme="light"]{background:#e9ecec;color:#16161a;--them-bg:#fff;--them-talk:#141416;--them-act:#68686e;--me-bg:#1f1f24;--me-talk:#fff;--me-act:#c9c9cc}
 .play[data-theme="light"] .pl-hud{color:#16161a}
@@ -568,7 +571,11 @@ html[data-boot="off"] .boot{display:none}
 <input type="file" id="picFile" accept="image/*" hidden>
 
 <dialog id="plPrefs">
-  <form method="dialog" class="dlg-head"><h2>フォント</h2><button aria-label="閉じる">✕</button></form>
+  <form method="dialog" class="dlg-head"><h2>文字の大きさ・フォント</h2><button aria-label="閉じる">✕</button></form>
+  <section class="sheet-sec">
+    <h3>文字の大きさ（ビューアと共通）</h3>
+    <div class="fs" id="ppFs" role="radiogroup" aria-label="文字の大きさ"><button role="radio" data-fs="xs" aria-checked="false">極小</button><button role="radio" data-fs="s" aria-checked="false">小</button><button role="radio" data-fs="m" aria-checked="false">中</button><button role="radio" data-fs="l" aria-checked="false">大</button></div>
+  </section>
   <section class="sheet-sec">
     <h3>フォント（吹き出し・地の文・大きな名前）</h3>
     <p class="cast-note pp-note">標準以外は Google Fonts から読み込みます。インターネットにつながっていないときは端末のフォントで表示します。フォントを取りに行くとき Google に IP アドレスなどが伝わります（ログの中身は送りません）。</p>
@@ -617,7 +624,7 @@ html[data-boot="off"] .boot{display:none}
     <button id="plSpeed" title="速さ"></button>
     <button id="plSceneBtn" title="場面（背景）の一覧と手直し">場面</button>
     <button id="plThemeBtn" class="tg" title="ライト・ダークを切り替え" aria-label="ライト・ダークを切り替え"><svg class="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg><svg class="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.5 5.5 0 0 1 6.4 3a5.5 5.5 0 1 0 6.6 6.6z"/></svg></button>
-    <button id="plFontBtn" class="tf" title="フォント" aria-label="フォント">Aa</button>
+    <button id="plFontBtn" class="tf" title="文字の大きさ・フォント" aria-label="文字の大きさ・フォント">Aa</button>
     <button id="plRecBtn" title="録画（R）。もう一度押すと止めて保存" aria-label="録画">● 録画</button>
     <button id="plFull" title="全画面（F）" aria-label="全画面"><svg viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
     <button id="plClose" title="終了（Esc）" aria-label="終了"><svg viewBox="0 0 16 16"><path d="m3.5 3.5 9 9m0-9-9 9"/></svg></button>
@@ -637,7 +644,7 @@ html[data-boot="off"] .boot{display:none}
         <dl class="hm-dl"><dt>RENDER</dt><dd id="hmMode">—</dd><dt>VERSION</dt><dd id="hmVer"></dd></dl>
         <div class="hm-tools">
           <button class="tg" data-act="theme" title="ライト・ダークを切り替え" aria-label="ライト・ダークを切り替え"><svg class="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg><svg class="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.5 5.5 0 0 1 6.4 3a5.5 5.5 0 1 0 6.6 6.6z"/></svg></button>
-          <button class="tf" data-act="font" title="フォント" aria-label="フォント">Aa</button>
+          <button class="tf" data-act="font" title="文字の大きさ・フォント" aria-label="文字の大きさ・フォント">Aa</button>
         </div>
       </div>
     </nav></div>
@@ -678,7 +685,7 @@ html[data-boot="off"] .boot{display:none}
           <li>速さは ゆっくり・ふつう・速い・一括表示 から、この画面か再生中の下のボタンで選べます。</li>
           <li>場面が違っていたら、再生中の「場面」から外したり、手で足したりできます。</li>
           <li>「● 録画」で再生のようすを動画（MP4 か WebM）で保存できます。</li>
-          <li>再生中の下のボタンの ☀ / ☾ で配色（ライト・ダーク）を切り替え、「Aa」で吹き出し・地の文のフォントを選べます。この画面の配色は、左下の ☀ / ☾ で再生とは別に切り替えられます。</li></ul></div></div>
+          <li>再生中の下のボタンの ☀ / ☾ で配色（ライト・ダーク）を切り替え、「Aa」で文字の大きさと、吹き出し・地の文のフォントを選べます。この画面の配色は、左下の ☀ / ☾ で再生とは別に切り替えられます。</li></ul></div></div>
       </section>
       <section class="hm-sec" data-sec="log">
         <div class="hm-panel"><h3 class="hm-ph">RELEASES<em>版</em></h3><div class="hm-pb"><ul class="hm-hist" id="hmHist"></ul></div></div>
@@ -954,15 +961,17 @@ function setFontSize(fs, keepPlace) {
   if (!['xs', 's', 'm', 'l'].includes(fs)) fs = 'm';
   const i = keepPlace && rows ? topIndex() : -1;
   document.documentElement.dataset.fs = fs;
-  $('fs').querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.fs === fs)));
+  for (const g of [$('fs'), $('ppFs')]) g.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.fs === fs)));
   if (i >= 0 && scrollY > 0) jump(i);  // 読んでいた発言が画面上端に残るように
 }
 setFontSize(store.get(FS_KEY));
-$('fs').addEventListener('click', e => {
+// ビューアの「Aa」と、再生・トップの「Aa」（#ppFs）は同じ設定
+for (const g of [$('fs'), $('ppFs')]) g.addEventListener('click', e => {
   const b = e.target.closest('[data-fs]');
   if (!b) return;
   setFontSize(b.dataset.fs, true);
   store.set(FS_KEY, b.dataset.fs);
+  touchAll();  // 再生中なら、大きさの変わった部品を canvas に写し直す
 });
 
 // ---------- アイコン ----------
@@ -2936,8 +2945,12 @@ function saveBlob(blob, name) {
 // 目次・見出し・日付・右の列のパネル（hparts）は、HTML-in-Canvas が使えるときは canvas に描き（置き場所 .hm-slot に合わせる）、
 // 使えないときは置き場所の中の HTML のまま。中央のページの本文とボタン（#home の .hm-main）はいつも canvas の上の HTML。
 // 起動するとまずここを出す（URL に #viewer を付けるとビューアから始める）。ログを開くとビューアへ（「再生」から選んだときは再生へ）
-const VERSION = '2.1';
+const VERSION = '2.2';
 const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを上に足す
+  ['2.2', '2026-10-28', [
+    '再生: 「Aa」で文字の大きさも選べるように（ビューアと共通）',
+    '再生: 吹き出しと地の文の文字を少し細く（Windows で太字のように見えていたため）',
+  ]],
   ['2.1', '2026-10-28', [
     'ビューア: 上部のボタンで吹き出しの色（3 色の見本）と文字の大きさ（Aa）を選べるように。スマホ幅では登場人物を人の形のアイコンに',
     '再生: HTML-in-Canvas で吹き出しの本文が出ないことがあったのを修正',
