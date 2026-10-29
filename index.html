@@ -340,7 +340,12 @@ html.busy-on{overflow:hidden}
 .hm-slot>.hm-part{width:100%}
 .hm-slot[data-slot="nav"]{min-height:0}
 .hm-slot[data-slot="nav"]>.hm-nav{height:100%}
-#stage .hm-panel{-webkit-backdrop-filter:none;backdrop-filter:none}  /* canvas の中ではぼかす下地が無いので */
+#stage .hm-panel,#stageGpu .hm-panel{-webkit-backdrop-filter:none;backdrop-filter:none}  /* canvas の中ではぼかす下地が無いので */
+/* ページが粒でできる（WebGPU）: 本文の複製は canvas の中で本文と同じに見せる。粒で替えている間は本文の HTML を隠し、組み上がったら出す */
+.hm-ghost{overflow:hidden;padding-right:6px}
+.hm-ghost .hm-sec.on{animation:none}  /* .hm-sec.on の出方（hmIn）が付くと、写した像が透明になる */
+.hm-secs{transition:opacity .25s linear}
+.hm-secs.morph{opacity:0;pointer-events:none;transition:none}
 /* 重ねる方式のときの出方（空 → ぼかしを解きながら少し浮き上がる。--d で順番に）。HTML-in-Canvas のときはシェーダーで溶かして出す */
 .home .hm-part{opacity:0;transform:translateY(10px);filter:blur(4px);transition:opacity .75s cubic-bezier(.33,1,.68,1) var(--d,0s),transform 1.05s cubic-bezier(.16,1,.3,1) var(--d,0s),filter .75s cubic-bezier(.33,1,.68,1) var(--d,0s)}
 .home.in .hm-part{opacity:1;transform:none;filter:none}
@@ -423,9 +428,9 @@ html.busy-on{overflow:hidden}
 .hm-speed button{padding:4px 12px;border:1px solid var(--h-line);border-radius:4px 14px 14px 14px;background:none;color:var(--h-ink);font-size:12px;font-weight:700}
 .hm-speed button:hover{background:var(--h-soft)}
 .hm-speed button[aria-checked="true"]{border-color:var(--h-acc);background:color-mix(in srgb,var(--h-acc) 18%,transparent);color:var(--h-acc-t)}
-.home .btn{padding:6px 15px;border:1px solid var(--h-line);border-radius:4px 16px 16px 16px;background:var(--h-panel);color:var(--h-ink);font-weight:700;font-size:12.5px}
+.home .btn,.hm-ghost .btn{padding:6px 15px;border:1px solid var(--h-line);border-radius:4px 16px 16px 16px;background:var(--h-panel);color:var(--h-ink);font-weight:700;font-size:12.5px}
 .home .btn:hover{background:var(--h-soft)}
-.home .btn.primary{border-color:var(--h-acc);background:var(--h-acc);color:var(--h-acc-ink)}
+.home .btn.primary,.hm-ghost .btn.primary{border-color:var(--h-acc);background:var(--h-acc);color:var(--h-acc-ink)}
 .home .btn.primary:hover{filter:brightness(1.08)}
 .hm-big{display:block;font:700 34px/1.05 var(--hud-font)}
 .hm-sub{color:var(--h-sub);font-size:12px}
@@ -623,7 +628,7 @@ html.busy-on{overflow:hidden}
 
 <section id="play" class="play" hidden aria-label="再生">
   <canvas id="stage"></canvas>
-  <canvas id="stageGpu" hidden></canvas>  <!-- 再生を WebGPU で描くとき（トップは #stage の WebGL2） -->
+  <canvas id="stageGpu" hidden></canvas>  <!-- WebGPU で描くとき（起動時に準備が間に合えばトップも。間に合わなければトップは #stage の WebGL2） -->
   <div class="pl-ui" id="plUi">
     <div class="hm-deco" id="hmDeco" inert><span class="hm-no" id="hmNo">01</span><span class="hm-kanji" id="hmKanji">使</span><span class="hm-en" id="hmEn">HOW TO USE</span></div>
     <div class="hm-chip" id="hmChip" inert><b id="hmChipName"></b><span id="hmChipText"></span></div>
@@ -730,13 +735,14 @@ html.busy-on{overflow:hidden}
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
-// 起動したときの読み込み中の表示: トップを 1 度描けて（シェーダーの組み立てが済んで）、フォントと前回のログが揃ったら消す（長くても 6 秒）
-const boot = { done: false, drawn: false, fonts: false, log: true };
+// 起動したときの読み込み中の表示: トップを 1 度描けて（シェーダーの組み立てが済んで）、フォントと前回のログが揃ったら消す（長くても 6 秒）。
+// stage: トップを出した（WebGPU の準備を待ってから出すので、それまでは消さない）
+const boot = { done: false, drawn: false, fonts: false, log: true, stage: false };
 function bootCheck() {
   if (boot.done) return;
   const msg = !boot.log ? '前回のログを開いています' : !boot.fonts ? 'フォントを読み込んでいます' : '描画の準備をしています';
   if ($('bootMsg').textContent !== msg) $('bootMsg').textContent = msg;
-  if (boot.fonts && boot.log && (boot.drawn || !gl)) bootDone();
+  if (boot.fonts && boot.log && boot.stage && (boot.drawn || !stageOn())) bootDone();
 }
 function bootDone() {
   if (boot.done) return;
@@ -1600,7 +1606,9 @@ const hparts = ['nav', 'head', 'date', 'cur', 'cast', 'talk'].map((key, order) =
 const hpart = key => hparts.find(P => P.key === key);
 // いまの画面で描く部品だけ（写し直すのもこれだけ。再生中にトップの部品まで写すと、送るたびに引っかかっていた）
 const PLAY_LAYERS = ['hud', 'name', 'nar', 'panel'], HOME_LAYERS = ['deco', 'chip'];
-const allLayers = () => play.mode === 'home' ? [...HOME_LAYERS.map(k => layers[k]), ...hparts.filter(P => !P.dom)] : PLAY_LAYERS.map(k => layers[k]);
+// ページを粒で替えている間の状態（WebGPU の区画の「ページが粒でできる」。本文の複製 ghosts も写す）
+let morph = null;
+const allLayers = () => play.mode === 'home' ? [...HOME_LAYERS.map(k => layers[k]), ...hparts.filter(P => !P.dom), ...(morph ? morph.ghosts : [])] : PLAY_LAYERS.map(k => layers[k]);
 const slots = { L: { side: -1 }, R: { side: 1 } };
 
 // ---- 文字送り: 本文の文字を「出した分」と「まだの分（.rest）」に分け、まだの分は場所だけ取っておく（パネルの大きさが変わらない）
@@ -1841,7 +1849,7 @@ function frame(now) {
   if (play.perf) perfTick(now, gap);
   if (hic && !layers[play.mode === 'home' ? 'deco' : 'panel'].ok && now - play.t0 > 1500) fallbackOverlay('HTML の部品を写せませんでした');
   if (rec) $('plRecTime').textContent = clock((now - rec.t0) / 1000);
-  if (play.mode === 'home') { tickHome(); stepHome(now); }
+  if (play.mode === 'home') { tickHome(); stepHome(now); stepMorph(now); }
   layout();
   if (hic) stageCv().requestPaint(); else render(now / 1000);
   play.raf = requestAnimationFrame(frame);
@@ -1957,11 +1965,13 @@ function placeHome(W, H, de) {
   const box = $('hmEmblem').getBoundingClientRect();
   const hw = Math.max(0, ov ? Math.min(box.width * .34, box.height * .42) : box.width * .42);
   const hh = ov ? hw : Math.max(0, box.height * .42);
-  const k = .9 + .1 * de;  // ページを替えたとき、少し小さい所から広がる
+  // ページを替えたとき、枠は少し小さい所から広がり、大きな文字と吹き出しはずれながら出てくる。
+  // 粒で替えるとき（morph）は、粒が着く所を動かさないよう大きさも置き場所も変えない（溶けて出るのは gpuRender）
+  const k = morph ? 1 : .9 + .1 * de, dk = morph ? 1 : de;
   Object.assign(e, { cx: box.left + box.width / 2, cy: box.top + box.height / 2, hw: hw * k, hh: hh * k, a: de });
-  const glitch = (1 - play.decoEnter) ** 2 * 1.6;
+  const glitch = morph ? 0 : (1 - play.decoEnter) ** 2 * 1.6;
   if (ov) {
-    Object.assign(deco, { x: e.cx - deco.w / 2 + 40 * (1 - de), y: e.cy + hh * .66 - deco.h / 2, alpha: de, glitch });
+    Object.assign(deco, { x: e.cx - deco.w / 2 + 40 * (1 - dk), y: e.cy + hh * .66 - deco.h / 2, alpha: dk, glitch });
   } else {
     // 枠の大きさを CSS に渡す（8px 刻み。HTML-in-Canvas では大きさが変わるたびに写し直すので）
     const bw = Math.round(hw * 2 / 8) * 8, bh = Math.round(hh * 2 / 8) * 8, bm = Math.round(bh * .16);
@@ -1970,13 +1980,13 @@ function placeHome(W, H, de) {
       Object.assign(deco, { bw, bh, w: bw + bm * 2, h: bh + bm * 2 });
       touch(deco);
     }
-    Object.assign(deco, { x: e.cx - bw / 2 - bm + 30 * (1 - de), y: e.cy - bh / 2 - bm, alpha: de, glitch });
+    Object.assign(deco, { x: e.cx - bw / 2 - bm + 30 * (1 - dk), y: e.cy - bh / 2 - bm, alpha: dk, glitch });
   }
   Object.assign(chip, {
     // 紋章が小さい（スマホ）ときも顔にかからないよう、下の端は枠の上から 4 割ほどまでに。
     // 上の端は画面の上で止めるが、狭い画面で .home ごとスクロールしたときは紋章と一緒に上へ抜ける
-    x: Math.max(8, Math.min(box.right - chip.w, e.cx + hw * .5)), y: Math.max(8 - $('home').scrollTop, Math.min(e.cy - hh * 1.02 - chip.h * .2, e.cy - hh * .6 - chip.h)) + 14 * (1 - de),
-    alpha: ov ? de : 0, glitch: 0,
+    x: Math.max(8, Math.min(box.right - chip.w, e.cx + hw * .5)), y: Math.max(8 - $('home').scrollTop, Math.min(e.cy - hh * 1.02 - chip.h * .2, e.cy - hh * .6 - chip.h)) + 14 * (1 - dk),
+    alpha: ov ? dk : 0, glitch: 0,
   });
 }
 // 紋章の枠の角の丸み（左上・右上・右下・左下、CSS の px）。ck が 0 で左上、1 で右上を角ばらせる（あいだは途中の形。ページを替えると形が移る）
@@ -1989,7 +1999,7 @@ function bubRadii(e) {
 // 出てくるときは順に、溶けながら少し浮き上がる。目次は押せるので、描いた位置を当たり判定にも伝える（トップでないときは外す）
 let navChkAt = 0;
 function layoutParts(home) {
-  const cv = $('stage'), pr = $('play').getBoundingClientRect(), now = performance.now();
+  const cv = $(gpuTop ? 'stageGpu' : 'stage'), pr = $('play').getBoundingClientRect(), now = performance.now();  // 部品の入っている canvas
   const clipOf = sel => { const r = $('home').querySelector(sel).getBoundingClientRect(); return [r.top - pr.top, r.bottom - pr.top]; };
   const clipMain = home && clipOf('.hm-main'), clipSide = home && clipOf('.hm-side');
   for (const P of hparts) {
@@ -2613,22 +2623,27 @@ function initGL() {
   P = { bg: compile(VS_FULL, FS_BG), comp: compile(VS_FULL, FS_COMP), spr: compile(VS_QUAD, FS_SPR), fx: compile(VS_FULL, FS_FX) };
   gl.bindVertexArray(gl.createVertexArray());
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-  if (can) {
-    hic = true;
-    cv.setAttribute('content', 'drawable');
-    cv.setAttribute('layoutsubtree', '');
-    for (const L of Object.values(layers)) { L.el.setAttribute('drawable', ''); L.el.removeAttribute('style'); cv.append(L.el); }
-    for (const P of hparts) { P.el.setAttribute('drawable', ''); cv.append(P.el); }  // 置き場所の高さは layout で保つ
-    cv.addEventListener('paint', onPaint);
-  }
+  if (can) useHic(cv);
   for (const L of [...Object.values(layers), ...hparts]) Object.assign(L, { tex: newTex(), tw: 0, th: 0, ok: false });
   showMode();
   watchStage(cv);
   return true;
 }
+// HTML-in-Canvas: 部品を全部（再生の部品とトップの部品）canvas の中へ移す
+function useHic(cv) {
+  hic = true;
+  cv.setAttribute('content', 'drawable');
+  cv.setAttribute('layoutsubtree', '');
+  for (const L of Object.values(layers)) { L.el.setAttribute('drawable', ''); L.el.removeAttribute('style'); cv.append(L.el); }
+  for (const P of hparts) { P.el.setAttribute('drawable', ''); cv.append(P.el); }  // 置き場所の高さは layout で保つ
+  cv.addEventListener('paint', onPaint);
+}
+// トップと再生の canvas を用意する。WebGPU の準備ができていればトップも WebGPU（initGpuTop）、できていなければ WebGL2（initGL）
+const initStage = () => initGpuTop() || initGL();
+const stageOn = () => !!(gl || gpuTop);
 
 // canvas の画素は画面の倍率に合わせる（2 倍まで。それ以上は重くなるだけなので抑える）。
-// 隠れている間（#stage は再生中、#stageGpu はトップ）は大きさを変えない（出し直した最初のコマから前の大きさで描ける）
+// 隠れている間（#stage は再生中、#stageGpu はトップを WebGL2 で描くときのトップ）は大きさを変えない（出し直した最初のコマから前の大きさで描ける）
 function watchStage(cv) {
   const ro = new ResizeObserver(([en]) => {
     const css = en.contentBoxSize?.[0], dev = en.devicePixelContentBoxSize?.[0];
@@ -2642,21 +2657,40 @@ function watchStage(cv) {
   });
   try { ro.observe(cv, { box: 'device-pixel-content-box' }); } catch { ro.observe(cv); }
 }
-// いま描いている canvas（再生を WebGPU で描いているときは #stageGpu）
-const stageCv = () => $(play.mode === 'play' && gpu?.ctx ? 'stageGpu' : 'stage');
+// いま描いている canvas（WebGPU で描いているときは #stageGpu）
+const stageCv = () => $(gpu?.ctx && (gpuTop || play.mode === 'play') ? 'stageGpu' : 'stage');
 // 見せるのは描いている方の canvas だけ（WebGL2 が使えなくなったら #stage は出さない）
 function showStage(gp) {
   $('stage').hidden = gp || !gl;
   $('stageGpu').hidden = !gp;
 }
 
-// ---- 再生だけ WebGPU で描く
-// WebGPU の準備は起動したらすぐ（読み込み中の表示を出している間に）始め、トップはそれを待たない。再生を始めるときに、できていれば使う。
+// ---- WebGPU で描く
+// WebGPU の準備は起動したらすぐ（読み込み中の表示を出している間に）始め、起動時のトップは 3 秒まで待つ。間に合えばトップも再生も WebGPU（initGpuTop）。
+// 間に合わなければトップは WebGL2 で描き、再生を始めるときに準備ができていれば再生だけ WebGPU で描く（initGpuStage）。
 // requestAdapter はメインスレッドを 0.5 秒ほど止める（1920×1080・UHD 770 のヘッドレスで 494ms。2026-10-29）。トップが出た後に始めると、そこでトップの動きが止まって見えた
 let gpuReady = null, gpuSettled = false;  // gpuSettled: 準備を終えた（使えなかったときも）
+let gpuTop = false;  // トップも WebGPU で描いている（部品は全部 #stageGpu の中）
 function startGpu() {
   if (gpuReady || !navigator.gpu || /[?&]gl/.test(location.search)) return;
   gpuReady = gpuBoot().catch(e => console.warn('[Talklog Viewer] WebGPU を準備できませんでした', e)).then(() => { gpuSettled = true; showMode(); });
+}
+// トップも WebGPU で描く（部品を全部 #stageGpu へ移す）。準備ができていない・WebGL2 で描き始めた後・HTML-in-Canvas の部品を WebGPU に写せないときは false（WebGL2 で描く）
+function initGpuTop() {
+  if (gpuTop) return true;
+  if (!gpu?.ready || gl || glBroken) return false;
+  const can = hicSupport();
+  if (can && !hicGpu) return false;
+  const cv = $('stageGpu'), ctx = cv.getContext('webgpu');
+  if (!ctx) { gpu = null; return false; }
+  gpu.ctx = ctx;
+  ctx.configure({ device: gpu.dev, format: gpu.fmt, alphaMode: 'opaque' });
+  gpuTop = true;
+  if (can) useHic(cv);
+  for (const L of [...Object.values(layers), ...hparts]) Object.assign(L, { tex: null, tw: 0, th: 0, ok: false, gpu: true });
+  watchStage(cv);
+  showMode();
+  return true;
 }
 // 再生の部品を #stageGpu へ移し、WebGPU で描き始める。準備ができていない・HTML-in-Canvas の部品を WebGPU に写せないときは false（WebGL2 で描く）
 function initGpuStage() {
@@ -2692,15 +2726,16 @@ const touchAll = () => { for (const L of allLayers()) touch(L); };
 // 再生を WebGPU と HTML-in-Canvas で描くときは、文字送りと地の文の列を流すあいだ部品を写し直さない（prepTyping・revealMask・CSS の [data-mask]）
 const gpuReveal = () => hic && !!gpu?.ctx;
 
-// 再生を WebGPU で描けるときに足す説明（吹き出しが散るのは HTML-in-Canvas のときだけ）
-const gpuNote = () => `再生は WebGPU で描き、雨・雪・光の粒と、${hic ? '立ち絵や吹き出しが' : '立ち絵が'}入れ替わるときに散る粒を GPU で動かします。`;
+// WebGPU で描けるときに足す説明（吹き出しが散るのと、ページを替えるときの粒は HTML-in-Canvas のときだけ）
+const gpuNote = () => (gpuTop ? 'トップと再生は' : '再生は') + ` WebGPU で描き、雨・雪・光の粒と、${hic ? '立ち絵や吹き出しが' : '立ち絵が'}入れ替わるときに散る粒を GPU で動かします。`
+  + (gpuTop && hic ? '広い画面では、トップのページを替えると、見出しや本文が粒に崩れて次のページに組み上がります。' : '');
 function showMode() {
   const mode = hic ? 'HTML-IN-CANVAS' : 'OVERLAY' + (hicWhy ? ' · ' + hicWhy : ''), gp = !!gpu?.ready && (!hic || hicGpu);
   $('play').dataset.mode = hic ? 'hic' : 'overlay';
   $('play').toggleAttribute('data-mask', gpuReveal());
-  $('hmMode').textContent = mode;
+  $('hmMode').textContent = (gpuTop ? 'WEBGPU · ' : '') + mode;
   $('plMode').textContent = (gpu?.ctx ? 'WEBGPU · ' : 'WEBGL2 · ') + mode;
-  $('hmSupport').textContent = !gl ? 'このブラウザでは WebGL2 が使えないため、再生モードは使えません。ビューアは使えます。'
+  $('hmSupport').textContent = !stageOn() ? 'このブラウザでは WebGL2 が使えないため、再生モードは使えません。ビューアは使えます。'
     : (hic ? 'このブラウザでは HTML-in-Canvas が使えます。吹き出しや大きな文字にも効果がかかり、録画は canvas からそのまま撮ります。'
       : 'このブラウザでは HTML-in-Canvas が使えないため、文字は canvas の上に重ねて表示します。録画は画面の共有で撮ります（許可を聞かれます）。Chrome では chrome://flags/#canvas-draw-element を有効にすると HTML-in-Canvas が使えます。')
     + (gp ? gpuNote() : '');
@@ -2778,7 +2813,7 @@ function elemSize(el) {
   return [Math.ceil(el.offsetWidth * d), Math.ceil(el.offsetHeight * d)];
 }
 
-// 立ち絵（無ければアイコン）のテクスチャ。同じ画像は使い回す。g: 1 なら WebGPU（再生を #stageGpu に描くとき）
+// 立ち絵（無ければアイコン）のテクスチャ。同じ画像は使い回す。g: 1 なら WebGPU（#stageGpu に描くとき）
 async function texFor(name, g = 0) {
   const rec = await picFor(name).catch(() => null);
   if (rec) {
@@ -2828,7 +2863,7 @@ function dropTextures() {
 }
 
 function render(time) {
-  if (play.mode === 'play' && gpu?.ctx) return gpuRender(time);
+  if (gpu?.ctx && (gpuTop || play.mode === 'play')) return gpuRender(time);
   if (!progsReady()) return;
   const cv = $('stage'), W = cv.width, H = cv.height, d = W / Math.max(1, cv.clientWidth), u = P.spr.u;
   if (bgW !== Math.ceil(W / 2) || bgH !== Math.ceil(H / 2)) {
@@ -2973,15 +3008,18 @@ function render(time) {
   if (hic) { layer(layers.nar); layer(layers.panel); layer(layers.hud); }
 }
 
-// ---- WebGPU（再生だけ。トップは上の WebGL2 で #stage に描く。URL に ?gl を付けると再生も WebGL2 で描く）
-// 1 枚の canvas は WebGL2 か WebGPU の片方しか持てないので、再生は別の canvas（#stageGpu）に描き、再生の部品（PLAY_LAYERS）をそちらへ移す（initGpuStage）。
-// 準備（gpuBoot）はトップを出した後に裏で始め、トップは WebGPU を待たない。再生を始めるときに準備ができていなければ、その回は WebGL2 で描く。
+// ---- WebGPU（URL に ?gl を付けると WebGL2 で描く）
+// 1 枚の canvas は WebGL2 か WebGPU の片方しか持てないので、WebGPU は別の canvas（#stageGpu）に描く。
+// 起動時のトップが準備を待てたら、トップも再生も #stageGpu に描き、部品を全部そちらへ移す（initGpuTop）。
+// 待てなかったらトップは WebGL2 の #stage のまま、再生の部品（PLAY_LAYERS）だけを移す（initGpuStage）。再生を始めるときにも準備ができていなければ、その回は WebGL2 で描く。
 // 絵は WebGL2 と同じものを WGSL で描き、そのうえで計算シェーダーで粒を動かす:
-//   天気（雨粒と地面での跳ね返り・雪）、漂う光の粒（話している人の円の飾りに沿って回る）、
-//   立ち絵が入れ替わるときに溶けた所から散る粒、次の発言へ移るときに前の吹き出しが粒になって流れる（HTML-in-Canvas のときだけ）。
-// 粒は 1 本のストレージバッファに [雨 | 雪 | 散る粒 | 光の粒] の順に並べ、毎フレーム計算シェーダーで動かして、そのまま頂点シェーダーで読む（CPU には戻さない）
-const NR = 12288, NS = 6144, ND = 49152, NM = 3072;
-const OS = NR, OD = NR + NS, OM = OD + ND, NP = OM + NM;
+//   天気（雨粒と地面での跳ね返り・雪）、漂う光の粒（再生では話している人の円の飾りに沿って回り、トップでは紋章の枠に沿って流れる）、
+//   立ち絵が入れ替わるときに溶けた所から散る粒、次の発言へ移るときに前の吹き出しが粒になって流れる（HTML-in-Canvas のときだけ）、
+//   トップでページを替えると見出し・大きな文字・本文のパネルが粒に崩れて次のページに組み上がる（同じく HTML-in-Canvas のときだけ。下の「ページが粒でできる」）。
+// 粒は 1 本のストレージバッファに [雨 | 雪 | 散る粒 | 光の粒 | ページの粒] の順に並べ、毎フレーム計算シェーダーで動かして、そのまま頂点シェーダーで読む（CPU には戻さない）。
+// ページの粒は動かさず、出したときに決めた道筋を頂点シェーダーがその時刻の位置にする
+const NR = 12288, NS = 6144, ND = 49152, NM = 3072, NF = 65536;
+const OS = NR, OD = NR + NS, OM = OD + ND, OF = OM + NM, NP = OF + NF;
 const GU = self.GPUTextureUsage || {}, GB = self.GPUBufferUsage || {}, GS = self.GPUShaderStage || {};
 let gpu = null;  // { dev, fmt, ctx（#stageGpu を WebGPU で使い始めたら）, ready, … }
 
@@ -3111,13 +3149,36 @@ fn glassRain(q: vec2f, t: f32) -> f32 {
   return vec4f(col, 1.);
 }`;
 
-// 仕上げ（FS_COMP の再生の分）: 背景を広げ、円の飾り・周辺の減光・走査線・粒子・稲光
+// 仕上げ（FS_COMP と同じ）: 背景を広げ、円の飾り・紋章の枠・周辺の減光・走査線・粒子・稲光
 const W_COMP = W_COMMON + `
-struct CO { res: vec2f, time: f32, dpr: f32, ringA: vec4f, ringB: vec4f, ringCol: vec3f, flash: f32, lightMode: f32 }
+struct CO { res: vec2f, time: f32, dpr: f32, ringA: vec4f, ringB: vec4f, ringCol: vec3f, flash: f32,
+  bub: vec4f, bubR: vec4f, bubCol: vec3f, bubA: f32, pill: vec2f, bubFill: f32, lightMode: f32 }
 @group(0) @binding(0) var<uniform> C: CO;
 @group(0) @binding(1) var bgT: texture_2d<f32>;
 @group(0) @binding(2) var smp: sampler;
 fn line(d: f32, w: f32) -> f32 { return 1. - ss(0., w, abs(d)); }
+fn bubble(col0: vec3f, p: vec2f) -> vec3f {
+  var col = col0;
+  let q = p - C.bub.xy; let u = C.dpr; let w = 1.2 * u; let sd = sdBub(q, C.bub.zw, C.bubR); let a = atan2(q.y, q.x) / 6.28318 + .5;
+  let ink = mix(mix(C.bubCol, vec3f(1.), .2), C.bubCol * .74, C.lightMode);
+  let inside = 1. - ss(-w, w, sd);
+  let glass = mix(col * .74 + C.bubCol * .07, mix(col, vec3f(1.), .5) * mix(vec3f(1.), C.bubCol, .05), C.lightMode);
+  col = mix(col, glass, inside * C.bubFill * C.bubA);
+  var k = line(sd, w * 1.3) * .95 + line(sd + 7. * u, w * .6) * .3
+    + line(sd - 9. * u, w * .8) * step(.5, fract(a * 72. + C.time * .015)) * .5
+    + line(sd - 17. * u, w * 2.) * step(.82, fract(a * 5. - C.time * .04)) * .75;
+  if (C.pill.y > 0.) {
+    let pq = p - (C.bub.xy + vec2f(C.bub.z * C.pill.x, C.bub.w + 24. * u)); let b = vec2f(27., 12.) * u;
+    let pp = abs(pq) - b + b.y; let pd = min(max(pp.x, pp.y), 0.) + length(max(pp, vec2f(0.))) - b.y;
+    col = mix(col, mix(col * .7 + C.bubCol * .14, mix(vec3f(1.), C.bubCol, .1), C.lightMode), (1. - ss(-w, w, pd)) * C.bubA * C.pill.y);
+    k += line(pd, w) * .8 * C.pill.y;
+    for (var i = 0; i < 3; i++) {
+      let fi = f32(i); let on = .3 + .7 * pow(max(0., sin(C.time * 3.6 - fi * .9)), 3.);
+      k += (1. - ss(2.2 * u, 3.4 * u, length(pq - vec2f((fi - 1.) * 9.5 * u, 0.)))) * on * C.pill.y;
+    }
+  }
+  return mix(col, ink, clamp(k, 0., 1.) * C.bubA);
+}
 fn ring(p: vec2f, R: vec4f, dir: f32) -> f32 {
   if (R.w <= 0.) { return 0.; }
   let d = p - R.xy; let r = length(d); let a = atan2(d.y, d.x) / 6.28318 + .5; let w = 1.2 * C.dpr;
@@ -3131,6 +3192,7 @@ fn ring(p: vec2f, R: vec4f, dir: f32) -> f32 {
   let p = pos.xy; let fc = vec2f(pos.x, C.res.y - pos.y); let uv = fc / C.res;
   var col = textureSampleLevel(bgT, smp, pos.xy / C.res, 0.).rgb;  // 背景のテクスチャは上が 0 の向きで描いてある
   col += C.ringCol * (ring(p, C.ringA, 1.) + ring(p, C.ringB, -1.));
+  if (C.bubA > .001) { col = bubble(col, p); }
   col *= 1. - mix(.62, .16, C.lightMode) * ss(.3, .95, length((uv - .5) * vec2f(1., .9)));
   col *= .985 + .015 * sin(fc.y * 3.14159 / C.dpr);
   col += (hash(fc + fract(C.time * 7.) * 97.) - .5) * mix(.03, .02, C.lightMode);
@@ -3209,11 +3271,13 @@ struct FG { res: vec2f, time: f32, dpr: f32, fogCol: vec3f, fog: f32, lightMode:
 }`;
 
 // 粒の形。位置・速さは canvas の画素。ex は種類ごとの値（雨: 奥行き・跳ねているか・地面の高さ、雪: 奥行き・揺れの位相、散る粒: 立ち絵か）。
+// ページの粒は pos = 出る所、vel = 着く所、col = 前の色、ex = 次の色、age = 出る時刻、life = 着く時刻（ページを替え始めてからの秒）。size が 0 なら出さない。
+// SIM の form はページを替え始めてからの秒（替えていないときは負）
 const W_PT = `
 struct Pt { pos: vec2f, vel: vec2f, col: vec4f, age: f32, life: f32, size: f32, seed: f32, ex: vec4f }
-const OS = ${OS}u; const OD = ${OD}u; const OM = ${OM}u; const NP = ${NP}u; const ND = ${ND}u;
-struct SIM { res: vec2f, time: f32, dt: f32, d: f32, rain: f32, snow: f32, lightMode: f32, frame: f32, motes: f32, pa: f32, pb: f32,
-  light: vec4f, tint: vec4f, ringA: vec4f, ringB: vec4f }
+const OS = ${OS}u; const OD = ${OD}u; const OM = ${OM}u; const OF = ${OF}u; const NP = ${NP}u; const ND = ${ND}u; const NF = ${NF}u;
+struct SIM { res: vec2f, time: f32, dt: f32, d: f32, rain: f32, snow: f32, home: f32, lightMode: f32, frame: f32, motes: f32, form: f32,
+  light: vec4f, tint: vec4f, ringA: vec4f, ringB: vec4f, bub: vec4f, bubR: vec4f, bubCol: vec4f }
 var<private> rs: u32;
 fn rnd() -> f32 {
   rs = rs * 747796405u + 2891336453u;
@@ -3292,11 +3356,13 @@ fn dust(p0: Pt) -> Pt {
   p.pos += p.vel * U.dt;
   return p;
 }
-// 光の粒: 話している人の円の飾りに寄って回る（4 割）か、漂う
+// 光の粒: 再生では話している人の円の飾りに寄って回り、トップでは紋章の枠（吹き出しの形）の少し外を沿って流れる
 fn newMote(p0: Pt) -> Pt {
   var p = p0; let d = U.d;
-  p.pos = vec2f(rnd(), rnd()) * U.res;
+  if (U.home > .5) { p.pos = U.bub.xy + (vec2f(rnd(), rnd()) * 2. - 1.) * (U.bub.zw + 90. * d); }
+  else { p.pos = vec2f(rnd(), rnd()) * U.res; }
   p.vel = vec2f(0.); p.seed = rnd(); p.age = 0.; p.life = 4. + 6. * rnd(); p.size = (.8 + 1.8 * rnd() * rnd()) * d;
+  p.ex = vec4f(U.home, 0., 0., 0.);
   return p;
 }
 fn ringPull(q: vec2f, R: vec4f) -> vec2f {
@@ -3309,9 +3375,20 @@ fn mote(p0: Pt) -> Pt {
   var p = p0; let d = U.d;
   if (p.life == 0.) { p = newMote(p); p.age = rnd() * p.life; return p; }
   p.age += U.dt;
-  if (p.age >= p.life) { return newMote(p); }
+  if (p.age >= p.life || p.ex.x != U.home) { return newMote(p); }
   var v = curl(p.pos / (180. * d) + vec2f(0., U.time * .03)) * 10. * d + vec2f(0., -5. * d);
-  v += (ringPull(p.pos, U.ringA) + ringPull(p.pos, U.ringB)) * step(p.seed, .4);  // 円に沿うのは 4 割だけ（残りは漂う）
+  if (U.home > .5) {
+    let q = p.pos - U.bub.xy; let e = 1.5 * d;
+    let sd = sdBub(q, U.bub.zw, U.bubR);
+    let gx = sdBub(q + vec2f(e, 0.), U.bub.zw, U.bubR) - sdBub(q - vec2f(e, 0.), U.bub.zw, U.bubR);
+    let gy = sdBub(q + vec2f(0., e), U.bub.zw, U.bubR) - sdBub(q - vec2f(0., e), U.bub.zw, U.bubR);
+    let g = vec2f(gx, gy) / max(length(vec2f(gx, gy)), 1e-4);
+    let off = sd - 14. * d;
+    let k = exp(-abs(off) / (70. * d)) * U.bubCol.w;
+    v += (vec2f(-g.y, g.x) * 36. * d * (.6 + .8 * p.seed) - g * off * 1.6) * k;
+  } else {
+    v += (ringPull(p.pos, U.ringA) + ringPull(p.pos, U.ringB)) * step(p.seed, .4);  // 円に沿うのは 4 割だけ（残りは漂う）
+  }
   p.vel += (v - p.vel) * (1. - exp(-U.dt * 3.));
   p.pos += p.vel * U.dt;
   return p;
@@ -3322,7 +3399,7 @@ fn mote(p0: Pt) -> Pt {
   rs = i * 9781u + u32(U.frame) * 6271u + 1u;
   _ = rnd();
   var p = pts[i];
-  if (i < OS) { p = rain(p); } else if (i < OD) { p = snow(p); } else if (i < OM) { p = dust(p); } else { p = mote(p); }
+  if (i < OS) { p = rain(p); } else if (i < OD) { p = snow(p); } else if (i < OM) { p = dust(p); } else if (i < OF) { p = mote(p); } else { return; }
   pts[i] = p;
 }`;
 
@@ -3361,6 +3438,60 @@ struct SPW { rect: vec4f, crop: vec4f, res: vec2f, d: f32, dir: f32, base: u32, 
     p.vel = vec2f(W.dir * (50. + 200. * rnd()), (rnd() - .65) * 150.) * d;
     p.life = .55 + .45 * rnd(); p.size = (.9 + .9 * rnd()) * d; p.ex = vec4f(0.);
   }
+  pts[idx] = p;
+}`;
+
+// ページの粒を出す（ページが粒でできる）: 前の像（A）の色のある所から出て、次の像（B）の色のある所へ着く。
+// 出る時刻と着く時刻は、W_SPR の溶ける縁がその点を通る時刻（同じノイズ）。着く所は、出る時刻の割合が近い点を何回か引いて選ぶ（飛ぶ長さをそろえる）。
+// 片方にしか無い部品は、散った所から集まる・崩れて散る。crop は像の中の使う範囲、asp が正なら紋章の枠（吹き出しの形、角の丸み rad）で切る
+const W_FORM = W_COMMON + W_PT + `
+struct FM { a: vec4f, b: vec4f, cropA: vec4f, cropB: vec4f, radA: vec4f, radB: vec4f,
+  res: vec2f, d: f32, tOut: f32, tIn0: f32, tIn: f32, aspA: f32, aspB: f32, base: u32, count: u32, hasA: u32, hasB: u32 }
+@group(0) @binding(0) var<uniform> M: FM;
+@group(0) @binding(1) var<storage, read_write> pts: array<Pt>;
+@group(0) @binding(2) var smp: sampler;
+@group(0) @binding(3) var texA: texture_2d<f32>;
+@group(0) @binding(4) var texB: texture_2d<f32>;
+fn when(pos: vec2f) -> f32 { return clamp((fbm(vec2f(pos.x, M.res.y - pos.y) / (60. * M.d)) + .1) / 1.2, 0., 1.); }
+fn pick(t: texture_2d<f32>, crop: vec4f, rad: vec4f, asp: f32, u: vec2f) -> vec4f {
+  var c = textureSampleLevel(t, smp, crop.xy + u * crop.zw, 0.);
+  if (asp > 0. && sdBub((u - .5) * vec2f(asp, 1.), vec2f(asp, 1.) * .5, rad) > 0.) { c = vec4f(0.); }
+  return c;
+}
+@compute @workgroup_size(64) fn form(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= M.count) { return; }
+  rs = i * 7919u + M.base * 104729u + 31u;
+  _ = rnd();
+  let idx = OF + (M.base + i) % NF;
+  var p: Pt;
+  var ca = vec4f(0.); var pa = vec2f(0.);
+  if (M.hasA == 1u) {
+    for (var k = 0; k < 10; k++) {
+      let u = vec2f(rnd(), rnd()); let c = pick(texA, M.cropA, M.radA, M.aspA, u);
+      if (c.a > .3) { ca = c; pa = M.a.xy + u * M.a.zw; break; }
+    }
+  }
+  let qa = select(rnd(), when(pa), ca.a > 0.);
+  var cb = vec4f(0.); var pb = vec2f(0.); var best = 9.;
+  if (M.hasB == 1u) {
+    for (var k = 0; k < 12; k++) {
+      let u = vec2f(rnd(), rnd()); let c = pick(texB, M.cropB, M.radB, M.aspB, u);
+      if (c.a > .3) {
+        let q = M.b.xy + u * M.b.zw; let dq = abs(when(q) - qa);
+        if (dq < best) { best = dq; cb = c; pb = q; }
+        if (best < .03) { break; }
+      }
+    }
+  }
+  if (ca.a <= 0. && cb.a <= 0.) { pts[idx] = p; return; }
+  let d = M.d; let ang = rnd() * 6.2832; let far = (80. + 160. * rnd()) * d;
+  p.seed = rnd(); p.size = (.8 + .8 * rnd()) * d;
+  if (ca.a > 0.) { p.pos = pa; p.col = vec4f(ca.rgb / ca.a, ca.a); p.age = M.tOut * qa; }
+  if (cb.a > 0.) { p.vel = pb; p.ex = vec4f(cb.rgb / cb.a, cb.a); p.life = M.tIn0 + M.tIn * when(pb); }
+  if (ca.a <= 0.) { p.pos = pb + vec2f(cos(ang), sin(ang)) * far; p.col = vec4f(p.ex.rgb, 0.); p.age = M.tIn0 * .5 * rnd(); }
+  if (cb.a <= 0.) { p.vel = pa + vec2f(cos(ang), sin(ang)) * far; p.ex = vec4f(p.col.rgb, 0.); p.life = p.age + .5 + .4 * rnd(); }
+  p.life = max(p.life, p.age + .3);
   pts[idx] = p;
 }`;
 
@@ -3405,13 +3536,28 @@ struct PO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) 
     hs = vec2f(p.size * (1. - .45 * t) * 1.6);
     c = mix(p.col.rgb, mix(EDGE, U.tint.rgb, .3), ss(0., .55, t) * select(.35, .8, glow));
     a = p.col.a * pow(1. - t, 1.4) * select(.9, 1., glow); add = select(.2, .7, glow) * (1. - lm);
-  } else {
+  } else if (ii < OF) {
     if (U.motes <= 0. || p.life <= 0.) { return o; }
     kind = 3u; hs = vec2f(p.size * 4.);
     let t = clamp(p.age / p.life, 0., 1.);
-    let base = mix(U.light.rgb, U.tint.rgb, .45);
-    c = mix(base, base * .55, lm);
+    let base = select(mix(U.light.rgb, U.tint.rgb, .45), mix(U.bubCol.rgb, vec3f(1.), .2), U.home > .5);
+    c = mix(base, select(base * .55, U.bubCol.rgb * .9, U.home > .5), lm);
     a = sin(3.14159 * t) * U.motes * (.55 + .45 * sin(U.time * (1.5 + 2. * p.seed) + p.seed * 40.)) * mix(.45, .3, lm); add = 1. - lm;
+  } else {
+    // ページの粒: 出る所から、外へふくらむ曲線（3 次のベジェ）で着く所へ。途中は渦で揺れ、ページの差し色に光る
+    let T = U.form;
+    if (T < 0. || p.size <= 0. || T < p.age || T > p.life + .16) { return o; }
+    let u = clamp((T - p.age) / max(p.life - p.age, .05), 0., 1.);
+    let e = u * u * (3. - 2. * u); let w = 1. - e; let g = sin(3.14159 * u);
+    let a0 = p.seed * 6.2832; let a1 = fract(p.seed * 7.31) * 6.2832;
+    let c1 = p.pos + vec2f(cos(a0), sin(a0) - .5) * (30. + 110. * fract(p.seed * 13.7)) * d;
+    let c2 = p.vel + vec2f(cos(a1), sin(a1)) * (20. + 80. * fract(p.seed * 3.9)) * d;
+    ctr = w * w * w * p.pos + 3. * w * w * e * c1 + 3. * w * e * e * c2 + e * e * e * p.vel
+      + curl(p.pos / (140. * d) + vec2f(U.time * .25, p.seed * 4.)) * 18. * d * g;
+    let col = mix(p.col, p.ex, ss(.3, .85, u));
+    c = mix(col.rgb, mix(U.bubCol.rgb, vec3f(1.), .3 * (1. - lm)), .6 * g);
+    a = col.a * ss(0., .06, T - p.age) * (1. - ss(p.life, p.life + .16, T));
+    hs = vec2f(p.size * (1.3 + .9 * g)); add = (.15 + .55 * g) * (1. - lm);
   }
   let pr = vec2f(-ax.y, ax.x);
   let w = ctr + pr * cr.x * hs.x + ax * cr.y * hs.y;
@@ -3440,7 +3586,7 @@ struct MO { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
 }
 @fragment fn fsMip(v: MO) -> @location(0) vec4f { return textureSampleLevel(src, smp, v.uv, 0.); }`;
 
-// アダプターとデバイスを取り、パイプラインを全部組み立てる（startGpu から。組み立てられなければ再生も WebGL2 で描く）。パイプラインは非同期で組み立てる（待つ間メインスレッドは止まらない）
+// アダプターとデバイスを取り、パイプラインを全部組み立てる（startGpu から。組み立てられなければトップも再生も WebGL2 で描く）。パイプラインは非同期で組み立てる（待つ間メインスレッドは止まらない）
 async function gpuBoot() {
   if (!navigator.gpu || /[?&]gl\b/.test(location.search)) return;
   const t0 = performance.now();
@@ -3499,7 +3645,7 @@ async function gpuBuild() {
     });
   };
   const compute = (code, label, entryPoint) => dev.createComputePipelineAsync({ label, layout: 'auto', compute: { module: gpuModule(code, label), entryPoint } });
-  [g.pBg, g.pComp, g.pSpr, g.pFog, g.pPt, g.pMip, g.pSim, g.pSpawn] = await Promise.all([
+  [g.pBg, g.pComp, g.pSpr, g.pFog, g.pPt, g.pMip, g.pSim, g.pSpawn, g.pForm] = await Promise.all([
     rpipe(W_BG, 'bg', 'vsFull', 'fsBg', 'rgba8unorm'),
     rpipe(W_COMP, 'comp', 'vsFull', 'fsComp', g.fmt),
     rpipe(W_SPR, 'spr', 'vsQuad', 'fsSpr', g.fmt, { blend: true, strip: true, layout: dev.createPipelineLayout({ bindGroupLayouts: [sprBGL, g.texBGL] }) }),
@@ -3508,15 +3654,17 @@ async function gpuBuild() {
     rpipe(W_MIP, 'mip', 'vsMip', 'fsMip', 'rgba8unorm'),
     compute(W_SIM, 'sim', 'sim'),
     compute(W_SPAWN, 'spawn', 'spawn'),
+    compute(W_FORM, 'form', 'form'),
   ]);
-  g.uBg = gpuBuf(144); g.uComp = gpuBuf(80); g.uFog = gpuBuf(48); g.uSim = gpuBuf(112); g.uSpr = gpuBuf(256 * 64); g.uSpawn = gpuBuf(256 * 4);
-  g.fBg = new Float32Array(36); g.fComp = new Float32Array(20); g.fFog = new Float32Array(12); g.fSim = new Float32Array(28); g.fSpr = new Float32Array(64 * 64);
+  g.uBg = gpuBuf(144); g.uComp = gpuBuf(128); g.uFog = gpuBuf(48); g.uSim = gpuBuf(160); g.uSpr = gpuBuf(256 * 64); g.uSpawn = gpuBuf(256 * 4); g.uForm = gpuBuf(256 * 8);
+  g.fBg = new Float32Array(36); g.fComp = new Float32Array(32); g.fFog = new Float32Array(12); g.fSim = new Float32Array(40); g.fSpr = new Float32Array(64 * 64);
   g.pts = dev.createBuffer({ size: NP * 64, usage: GB.STORAGE });
   g.bgBG = gpuBind(g.pBg, [{ buffer: g.uBg }]);
   g.fogBG = gpuBind(g.pFog, [{ buffer: g.uFog }]);
   g.simBG = gpuBind(g.pSim, [{ buffer: g.uSim }, { buffer: g.pts }]);
   g.ptBG = gpuBind(g.pPt, [{ buffer: g.uSim }, { buffer: g.pts }]);
   g.sprBG = dev.createBindGroup({ layout: sprBGL, entries: [{ binding: 0, resource: { buffer: g.uSpr, size: 176 } }, { binding: 1, resource: g.smp }] });
+  g.blank = dev.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GU.TEXTURE_BINDING }).createView();  // ページの粒で、片方の像が無いときに渡す
   g.ready = true;
 }
 
@@ -3566,7 +3714,7 @@ function gpuUpLayer(L) {
       L.err = err.message;
       console.warn('HTML-in-Canvas（WebGPU）: 写せませんでした', L.el.id, err.message);
     });
-    if (!L.bad) L.ok = true;
+    if (!L.bad) { L.ok = true; L.upN = (L.upN || 0) + 1; }  // upN: 写した回数（ページの粒が、次のページの像を写し終えたかを見る）
   } catch (err) {
     L.err = String(err?.message || err);
     if (!L.warned) { L.warned = true; console.warn('HTML-in-Canvas（WebGPU）: 写せませんでした', L.el.id, err); }
@@ -3588,7 +3736,124 @@ function panelDust() {
   g.spawns.push({ src: g.ghost, rect: [L.x * d, L.y * d, L.w * d, L.h * d], kind: 1, dir: play.side < 0 ? -1 : 1, count: 9000 });
 }
 
-// render の WebGPU 版（再生だけ）。順番は WebGL2 と同じで、粒の計算と描く分が入る
+// ---- ページが粒でできる（トップの案 F。トップを WebGPU と HTML-in-Canvas で描く、広い画面だけ）
+// 目次でページを替えると、見出し・大きな文字・概要の吹き出しと立ち絵・本文のパネルが、溶けて消える縁から粒に崩れ、
+// 渦を巻いて次のページの同じ部品へ飛び、次の像が溶けて現れる縁にちょうど着く（W_FORM）。
+// 前の像は、canvas に描いている部品は写した像の控え、本文（canvas の上の HTML）は複製を canvas の中に入れて写した像。
+// 次の本文も複製を写して描き、組み上がったら上の HTML を出して入れ替える
+const FORM = { out: .5, in0: .5, in: .65, swap: .25 };  // 前の像が消える長さ、次の像が現れ始める時刻と長さ、本文を HTML へ戻す長さ（秒）
+const canMorph = () => !!(gpuTop && gpu?.ready && hic && play.mode === 'home' && !still() && innerWidth > 860 && ghostBox.length);
+// 部品の像の控え（次のページの像を写す前に取る）
+function morphCopy(L) {
+  if (!L.ok || !L.tex || L.alpha < .5) return null;
+  const g = gpu, tex = g.dev.createTexture({ size: [L.tw, L.th], format: 'rgba8unorm', usage: GU.TEXTURE_BINDING | GU.COPY_DST });
+  const enc = g.dev.createCommandEncoder();
+  enc.copyTextureToTexture({ texture: L.tex.tex }, { texture: tex }, [L.tw, L.th]);
+  g.dev.queue.submit([enc.finish()]);
+  return { tex: gpuWrap(tex), x: L.x, y: L.y, w: L.w, h: L.h, ok: true, own: true };
+}
+// 本文の複製を入れる箱（前と次の 2 つ。トップを出したら canvas の中に置いておき、ページを替えるときは中身だけ入れ替える。テクスチャも使い回す）
+const ghostBox = [];
+function ghostBoxes() {
+  if (ghostBox.length || !hic) return;
+  for (let k = 0; k < 2; k++) {
+    const el = document.createElement('div');
+    el.className = 'hm-part hm-ghost';
+    el.inert = true;
+    el.setAttribute('aria-hidden', 'true');
+    el.setAttribute('drawable', '');
+    $('stageGpu').append(el);
+    ghostBox.push({ el, ok: false, gpu: true });
+  }
+}
+// 本文の複製（id を外して箱へ）。大きさは本文の枠、スクロールしていた分もずらす
+function bodyGhost(k, sec) {
+  const box = $('home').querySelector('.hm-secs'), G = ghostBox[k], w = G.el;
+  const c = $('home').querySelector(`.hm-sec[data-sec="${sec}"]`).cloneNode(true);
+  c.classList.add('on');
+  c.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+  w.replaceChildren(c);
+  w.style.width = box.clientWidth + 'px';
+  w.style.height = box.clientHeight + 'px';
+  w.scrollTop = box.scrollTop;
+  const pr = $('play').getBoundingClientRect(), r = box.getBoundingClientRect();
+  return Object.assign(G, { x: r.left - pr.left + box.clientLeft, y: r.top - pr.top + box.clientTop, w: box.clientWidth, h: box.clientHeight, ok: false, force: true, upN: 0 });
+}
+// 概要の紋章の立ち絵（主役）。吹き出しの形で切って描く（mask 3）
+function faceOf() {
+  const e = emblem, t = e.t;
+  if (homeNow !== 'overview' || !t || e.hw <= 0) return null;
+  const crop = t.w > t.h ? [(1 - t.h / t.w) / 2, 0, t.h / t.w, 1] : [0, t.kind === 'cut' ? .03 : (1 - t.w / t.h) / 2, 1, t.w / t.h];
+  return { tex: t.tex, x: e.cx - e.hw, y: e.cy - e.hh, w: e.hw * 2, h: e.hh * 2, ok: true, mask: 3, rad: bubRadii(e).map(v => v / (e.hh * 2)), asp: e.hw / e.hh, crop };
+}
+function startMorph(sec) {
+  endMorph();
+  const was = { head: morphCopy(hpart('head')), deco: morphCopy(layers.deco), chip: homeNow === 'overview' ? morphCopy(layers.chip) : null, face: faceOf() };
+  const g0 = bodyGhost(0, homeNow);
+  morph = { phase: 'wait', at: performance.now(), parts: [], ghosts: [g0], shown: false };
+  homeSec(sec);
+  const g1 = bodyGhost(1, sec), ov = sec === 'overview';
+  morph.ghosts.push(g1);
+  if (ov) touch(layers.chip);
+  const add = (key, from, to) => { if (from || to) morph.parts.push({ key, from, to, n0: to?.upN || 0 }); };
+  add('head', was.head, hpart('head'));
+  add('deco', was.deco, layers.deco);
+  add('chip', was.chip, ov ? layers.chip : null);
+  add('face', was.face, ov ? 'face' : null);  // 次の立ち絵の置き場所は、粒を出すときに決める
+  add('body', g0, g1);
+  $('home').querySelector('.hm-secs').classList.add('morph');
+}
+// 前の像がそろい、次のページの部品を写し終えたか
+const morphReady = M => M.parts.every(q => (!q.from || q.from.ok) && (!q.to || q.key === 'face' || (q.to.ok && (q.to.upN || 0) > q.n0)));
+// 毎フレーム（frame）: 写すのを待ちすぎたらやめて普通に出す。組み上がったら本文の HTML を出し、出しきったら片付ける
+function stepMorph(now) {
+  const M = morph;
+  if (gpuTop) ghostBoxes();
+  if (!M) return;
+  if (M.phase === 'wait') { if (now - M.at > 600) endMorph(); return; }
+  const T = now / 1000 - M.t0;
+  if (!M.shown && T >= FORM.in0 + FORM.in) { M.shown = true; $('home').querySelector('.hm-secs').classList.remove('morph'); }
+  if (T >= FORM.in0 + FORM.in + FORM.swap) endMorph();
+}
+function endMorph() {
+  const M = morph;
+  if (!M) return;
+  morph = null;
+  for (const q of M.parts) if (q.from?.own) q.from.tex.tex.destroy();
+  for (const G of M.ghosts) G.el.replaceChildren();  // 箱とテクスチャは次に替えるときに使う
+  $('home').querySelector('.hm-secs').classList.remove('morph');
+}
+// 粒を出す（gpuRender の計算パスの中で 1 回）。粒の数は部品の広さで分け、ページの粒の場所を全部書き直す（前に替えたときの粒を残さない）
+function formSpawn(cp, M, time, W, H, d) {
+  const g = gpu, q = g.dev.queue, rect = o => [o.x * d, o.y * d, o.w * d, o.h * d];
+  const face = M.parts.find(p => p.key === 'face');
+  if (face) face.to = face.to && faceOf();
+  M.parts = M.parts.filter(p => p.from || p.to);
+  const area = p => Math.max(p.from ? p.from.w * p.from.h : 0, p.to ? p.to.w * p.to.h : 0);
+  const sum = M.parts.reduce((n, p) => n + area(p), 0) || 1;
+  let base = 0;
+  cp.setPipeline(g.pForm);
+  M.parts.forEach((p, k) => {
+    const count = k === M.parts.length - 1 ? NF - base : Math.floor(NF * area(p) / sum);
+    const ab = new ArrayBuffer(144), f = new Float32Array(ab), u = new Uint32Array(ab), A = p.from, B = p.to;
+    if (A) f.set(rect(A), 0);
+    if (B) f.set(rect(B), 4);
+    f.set(A?.crop || [0, 0, 1, 1], 8);
+    f.set(B?.crop || [0, 0, 1, 1], 12);
+    f.set(A?.rad || [0, 0, 0, 0], 16);
+    f.set(B?.rad || [0, 0, 0, 0], 20);
+    f.set([W, H, d, FORM.out, FORM.in0, FORM.in, A?.mask === 3 ? A.asp : 0, B?.mask === 3 ? B.asp : 0], 24);
+    u.set([base, count, A ? 1 : 0, B ? 1 : 0], 32);
+    q.writeBuffer(g.uForm, k * 256, ab);
+    cp.setBindGroup(0, gpuBind(g.pForm, [{ buffer: g.uForm, offset: k * 256, size: 144 }, { buffer: g.pts }, g.smp, A ? A.tex.view : g.blank, B ? B.tex.view : g.blank]));
+    cp.dispatchWorkgroups(Math.max(1, Math.ceil(count / 64)));
+    base += count;
+  });
+  M.phase = 'run';
+  M.t0 = time;
+}
+
+// render の WebGPU 版。順番は WebGL2 と同じで、粒の計算と描く分が入る（トップを描くのは gpuTop のときだけ）
 function gpuRender(time) {
   const g = gpu;
   if (!g.ready) return;
@@ -3596,7 +3861,7 @@ function gpuRender(time) {
   const dt = g.lastT == null ? 0 : Math.min(.05, Math.max(0, time - g.lastT));
   g.lastT = time;
   g.frame++;
-  const lk = play.lightK, calm = still();
+  const home = play.mode === 'home', e = emblem, lk = play.lightK, calm = still();
   const bw = Math.ceil(W / 2), bh = Math.ceil(H / 2);
   // 背景は 1 コマおきに描く（前の絵を使い回す）。大理石も光もゆっくり動くので見た目は変わらず、
   // 毎コマ描くと 1920×1080・UHD 770 で 1 割ほどのコマが落ちた（2026-10-28）。作り直した直後は必ず描く
@@ -3609,15 +3874,19 @@ function gpuRender(time) {
     bgNow = true;
   }
   const ring = s => {
-    const t = s.cur || s.from, r = t && slotGeo(s, t, W, H, time);
+    const t = !home && (s.cur || s.from), r = t && slotGeo(s, t, W, H, time);
     return r ? [r.cx, r.cy, r.r, Math.max(0, s.act - .5) * 2] : [0, 0, 0, 0];
   };
   const rA = ring(slots.L), rB = ring(slots.R);
+  const bub = home ? [e.cx * d, e.cy * d, e.hw * d, e.hh * d] : [0, 0, 0, 0], bubR = bubRadii(e).map(v => v * d);
   g.fBg.set([bw, bh, time, play.pulse, ...play.tint, look.marble, ...ACCENT.map(v => v / 255), look.neon, ...look.amb, look.bokeh,
     ...look.light, look.city, ...look.sky, look.blind, ...look.win, look.tile, look.tube, look.floor, look.dim, look.winA, look.rainWin, lk, 0]);
   const ringCol = play.tint.map((v, n) => .22 * (.55 + .45 * v) * (1 - lk) - [.3, .29, .32][n] * lk);
-  g.fComp.set([W, H, time, d, ...rA, ...rB, ...ringCol, play.flash, lk, 0, 0, 0]);
-  g.fSim.set([W, H, time, dt, d, look.rain, look.snow, lk, g.frame, calm ? .4 : 1, 0, 0, ...look.light, 0, ...play.tint, 0, ...rA, ...rB]);
+  // トップは紋章の枠（吹き出しの形）。打ち込み中の印は、角ばらせた側と反対の下に（WebGL2 の render と同じ）
+  g.fComp.set([W, H, time, d, ...rA, ...rB, ...ringCol, play.flash, ...bub, ...bubR, ...e.col, home ? e.a : 0,
+    .6 * (1 - 2 * e.ck), homeNow === 'overview' ? 0 : 1, homeNow === 'overview' && e.t ? 0 : 1, lk]);
+  g.fSim.set([W, H, time, dt, d, look.rain, look.snow, home ? 1 : 0, lk, g.frame, calm ? .4 : 1, 0,
+    ...look.light, 0, ...play.tint, 0, ...rA, ...rB, ...bub, ...bubR, ...e.col, home ? e.a : 0]);
   g.fFog.set([W, H, time, d, ...look.fogCol, look.fog, lk, 0, 0, 0]);
 
   const enc = dev.createCommandEncoder();
@@ -3635,10 +3904,13 @@ function gpuRender(time) {
     cp.setBindGroup(0, gpuBind(g.pSpawn, [{ buffer: g.uSpawn, offset: k * 256, size: 64 }, { buffer: g.pts }, g.smp, s.src.view]));
     cp.dispatchWorkgroups(Math.ceil(s.count / 64));
   });
+  if (home && morph?.phase === 'wait' && morphReady(morph)) formSpawn(cp, morph, time, W, H, d);
   cp.setPipeline(g.pSim);
   cp.setBindGroup(0, g.simBG);
   cp.dispatchWorkgroups(Math.ceil(NP / 64));
   cp.end();
+  const M = home ? morph : null, mT = M?.phase === 'run' ? time - M.t0 : -1;  // ページを替え始めてからの秒（替えていなければ -1）
+  g.fSim[11] = mT;
 
   if (bgNow) {
     const bp = enc.beginRenderPass({ colorAttachments: [{ view: g.bgView, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
@@ -3653,13 +3925,14 @@ function gpuRender(time) {
   pass.setBindGroup(0, g.compBG);
   pass.draw(3);
   g.nSpr = 0;
+  const sweepCol = e.col.map(v => v * (lk > .5 ? .8 : 1));  // 走査線（トップの部品）はページの差し色
   const sprite = (tex, r, o = {}) => {
     if (!tex || g.nSpr >= 64) return;
     const b = g.nSpr++ * 64, f = g.fSpr;
     f.set(r, b);
     f.set(o.crop || [0, 0, 1, 1], b + 4);
     f.set(o.rad || [0, 0, 0, 0], b + 8);
-    f.set([W, H, o.p ?? 1, o.dir || 0, .78, .7, 1, o.alpha ?? 1, 0, 0, 0, o.bright ?? 1,
+    f.set([W, H, o.p ?? 1, o.dir || 0, .78, .7, 1, o.alpha ?? 1, ...sweepCol, o.bright ?? 1,
       o.sat ?? 1, o.glitch || 0, time, d, o.mask || 0, o.fadeB || 0, o.wrap ? 1 : 0, o.sweep ?? -2, o.asp || 1, (o.ang || 0) + (o.spin || 0), 0, 0], b + 12);
     f.set(o.rv || [0, 0, 0, 0], b + 36);
     f.set(o.rc || [0, 0, 0, 0], b + 40);
@@ -3669,9 +3942,9 @@ function gpuRender(time) {
     pass.draw(4);
   };
   const dots = (first, count) => { pass.setPipeline(g.pPt); pass.setBindGroup(0, g.ptBG); pass.draw(4, count, 0, first); };
-  const layer = L => {
+  const layer = (L, o) => {
     if (!L.ok || L.alpha <= .002) return;
-    if (!L.win) return sprite(L.tex, [L.x * d, L.y * d, L.w * d, L.h * d], L);
+    if (!L.win) return sprite(L.tex, [L.x * d, L.y * d, L.w * d, L.h * d], o ? { ...L, ...o } : L);
     // 地の文の列（gpuReveal）: 写した列のうち窓の分だけを、上下をぼかして出す
     const h = Math.min(L.win, L.h);
     sprite(L.tex, [L.x * d, L.y * d, L.w * d, h * d], { ...L, crop: [0, L.scroll / L.h, 1, h / L.h], mask: 4 });
@@ -3686,21 +3959,55 @@ function gpuRender(time) {
     };
     if (s.p < 1) { one(s.from, -1); one(s.cur, 1); } else one(s.cur, 0);
   };
-  dots(OM, NM);  // 光の粒（立ち絵の後ろ）
-  // 立ち絵が入れ替わったら、入れ替わる前の絵から散る粒を出す（溶け始めた位置で）
-  for (const s of [slots.L, slots.R]) {
-    if (!s.dust) continue;
-    s.dust = false;
-    if (s.from && !calm) {
-      const k = s.from.kind;
-      g.spawns.push({ src: s.from.tex, rect: slotGeo(s, s.from, W, H, time).rect, kind: 0, mask: k === 'round' ? 2 : k === 'card' ? 1 : 3, count: 12288 });
+  dots(OM, NM);  // 光の粒（立ち絵や紋章の後ろ）
+  if (home) {
+    // ページを替えている間（ページが粒でできる）: 替える部品は前の像を溶かして消し、次の像を溶かして出す（粒が出る・着く時刻と同じ縁で）
+    const pOut = Math.min(1, Math.max(0, mT) / FORM.out), pIn = Math.min(1, Math.max(0, (mT - FORM.in0) / FORM.in));
+    const swap = (key, draw) => {
+      const q = M?.parts.find(p => p.key === key);
+      if (!q) return draw();
+      if (q.from?.ok && pOut < 1) sprite(q.from.tex, [q.from.x * d, q.from.y * d, q.from.w * d, q.from.h * d], { ...q.from, alpha: 1, p: pOut, dir: -1 });
+      if (q.to && mT >= 0 && pIn > 0) draw({ alpha: 1, glitch: 0, p: pIn, dir: pIn < 1 ? 1 : 0 });
+    };
+    // 概要の紋章: 主役の立ち絵の上の方（顔のあたり）を正方形に切り出し、吹き出しの枠の形に切る。その上に名前（大きな文字）
+    const f = faceOf();
+    swap('face', o => { if (f) sprite(f.tex, [f.x * d, f.y * d, f.w * d, f.h * d], { ...f, alpha: e.a, p: e.p, dir: e.p < 1 ? 1 : 0, ...o }); });
+    if (!boot.done) { boot.drawn = true; bootCheck(); }
+    if (hic) {
+      // 大きな文字 → 吹き出し → 置き場所型の部品
+      const s = still();
+      swap('deco', o => layer(layers.deco, o));
+      swap('chip', o => layer(layers.chip, o));
+      for (const P of hparts) {
+        swap(P.key, (o = {}) => {
+          if (P.dom || !P.ok || P.alpha <= .002) return;
+          const y0 = Math.max(P.y, P.clip ? P.clip[0] : -1e9), y1 = Math.min(P.y + P.h, P.clip ? P.clip[1] : 1e9);
+          if (y1 <= y0) return;
+          const sw = ((time - P.order * 1.7) % 12) / 1.2 - .1;  // 12 秒ごとに、部品ごとにずらして走査線を通す
+          sprite(P.tex, [P.x * d, y0 * d, P.w * d, (y1 - y0) * d], {
+            alpha: P.alpha, p: P.p, dir: P.dir, glitch: P.glitch, crop: [0, (y0 - P.y) / P.h, 1, (y1 - y0) / P.h], sweep: s || sw > 1.15 || P.p < 1 || o.p < 1 ? -2 : sw, ...o,
+          });
+        });
+      }
+      if (M) swap('body', o => { const G = M.ghosts[1]; if (G.ok) sprite(G.tex, [G.x * d, G.y * d, G.w * d, G.h * d], o); });
+      if (mT >= 0) dots(OF, NF);  // ページの粒（部品の上）
     }
+  } else {
+    // 立ち絵が入れ替わったら、入れ替わる前の絵から散る粒を出す（溶け始めた位置で）
+    for (const s of [slots.L, slots.R]) {
+      if (!s.dust) continue;
+      s.dust = false;
+      if (s.from && !calm) {
+        const k = s.from.kind;
+        g.spawns.push({ src: s.from.tex, rect: slotGeo(s, s.from, W, H, time).rect, kind: 0, mask: k === 'round' ? 2 : k === 'card' ? 1 : 3, count: 12288 });
+      }
+    }
+    (slots.L.act <= slots.R.act ? [slots.L, slots.R] : [slots.R, slots.L]).forEach(portrait);
+    if (hic) layer(layers.name);
+    dots(0, OM);  // 雨・雪・散る粒（立ち絵の上、吹き出しの下）
+    if (look.fog > .003) { pass.setPipeline(g.pFog); pass.setBindGroup(0, g.fogBG); pass.draw(3); }
+    if (hic) { layer(layers.nar); layer(layers.panel); layer(layers.hud); }
   }
-  (slots.L.act <= slots.R.act ? [slots.L, slots.R] : [slots.R, slots.L]).forEach(portrait);
-  if (hic) layer(layers.name);
-  dots(0, OM);  // 雨・雪・散る粒（立ち絵の上、吹き出しの下）
-  if (look.fog > .003) { pass.setPipeline(g.pFog); pass.setBindGroup(0, g.fogBG); pass.draw(3); }
-  if (hic) { layer(layers.nar); layer(layers.panel); layer(layers.hud); }
   pass.end();
   q.writeBuffer(g.uBg, 0, g.fBg);
   q.writeBuffer(g.uComp, 0, g.fComp);
@@ -3716,7 +4023,7 @@ async function startPlay(from) {
   if (!items.length || play.mode === 'play' || play.starting) return;
   const tStart = performance.now();
   busy(null);  // 大きいログは、発言を入れ終えるのと場面の手がかりを探すのを待たずに始める（裏で続ける）
-  if (!initGL()) { toast('このブラウザでは再生を使えません（WebGL2 が必要です）', 5000); return; }
+  if (!initStage()) { toast('このブラウザでは再生を使えません（WebGL2 が必要です）', 5000); return; }
   // WebGPU の準備がまだなら少しだけ待つ（1 回だけ。長くかかるときは、できるまで WebGL2 で描く）
   if (gpuReady && !gpuSettled && !play.gpuWaited) {
     play.starting = play.gpuWaited = true;
@@ -3941,8 +4248,12 @@ function saveBlob(blob, name) {
 // 目次・見出し・日付・右の列のパネル（hparts）は、HTML-in-Canvas が使えるときは canvas に描き（置き場所 .hm-slot に合わせる）、
 // 使えないときは置き場所の中の HTML のまま。中央のページの本文とボタン（#home の .hm-main）はいつも canvas の上の HTML。
 // 起動するとまずここを出す（URL に #viewer を付けるとビューアから始める）。ログを開くとビューアへ（「再生」から選んだときは再生へ）
-const VERSION = '2.4';
+const VERSION = '2.5';
 const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを上に足す
+  ['2.5', '2026-10-29', [
+    'トップ: WebGPU が使えるブラウザではトップも WebGPU で描くように。光の粒が紋章の枠に沿って流れる',
+    'トップ（WebGPU・HTML-in-Canvas の広い画面）: ページを替えると、見出し・大きな文字・本文が粒に崩れて、次のページに組み上がるように',
+  ]],
   ['2.4', '2026-10-29', [
     '再生: WebGPU が使えるブラウザでは WebGPU で描くように（トップと、WebGPU が使えないときの再生は今までどおり WebGL2）',
     '再生（WebGPU）: 雨と雪が粒ごとに動き、光の粒が話している人の円の飾りに沿って回るように。立ち絵や吹き出しは入れ替わるときに粒になって散る（吹き出しは HTML-in-Canvas のときだけ）',
@@ -4060,14 +4371,15 @@ function homeIntro() {
 }
 
 function showHome(sec = homeNow) {
-  const ok = initGL();
+  const ok = initStage();
   if (play.mode === 'play') stopPlay();
   play.mode = 'home';
-  showStage(false);
+  showStage(gpuTop);
   $('play').dataset.view = 'home';
   $('home').hidden = false;
   $('play').hidden = false;
   document.documentElement.classList.add('playing');
+  endMorph();
   lookTo = lookOf(SCENE0);
   look = structuredClone(lookTo);
   Object.assign(play, { t0: performance.now(), needAll: true });
@@ -4080,6 +4392,7 @@ function showHome(sec = homeNow) {
 function leaveHome() {
   pendingPlay = 0;
   if (play.mode !== 'home') return;
+  endMorph();
   stopStage();
   $('home').hidden = true;
   $('play').hidden = true;
@@ -4107,7 +4420,7 @@ function homeSec(sec) {
   homeAccent();
   play.decoEnter = 0;  // 大きな文字を入れ替えて、ずれながら入ってくる
   play.pulse = 1;
-  hpart('head').t0 = still() ? 0 : performance.now();  // 見出しも溶かして出し直す
+  hpart('head').t0 = still() || morph ? 0 : performance.now();  // 見出しも溶かして出し直す（粒で替えるときは gpuRender で）
   touch(layers.deco);
   touch(hpart('head'));
   touch(hpart('nav'));
@@ -4212,10 +4525,10 @@ function setKanji(t) {
 // 文字の幅の目安（全角は 1.6、ほかは 1）
 const widthOf = s => Array.from(s).reduce((n, c) => n + (/[\u3000-\u9fff\uff00-\uffef]/.test(c) ? 1.6 : 1), 0);
 function setEmblem(name) {
-  if (!gl || (name === emblem.name && emblem.started)) return;
+  if (!stageOn() || (name === emblem.name && emblem.started)) return;
   Object.assign(emblem, { name, started: true, t: null });
   const tok = ++emblem.tok;
-  if (name) texFor(name).then(t => { if (tok === emblem.tok) Object.assign(emblem, { t, p: 0 }); });
+  if (name) texFor(name, gpuTop ? 1 : 0).then(t => { if (tok === emblem.tok) Object.assign(emblem, { t, p: 0 }); });
 }
 // ログを読み込んだ後: 「再生モード」から選んだときは再生へ、それ以外はビューアへ（起動時に裏で開いたときはトップのまま）
 function afterLoad(quiet) {
@@ -4236,7 +4549,7 @@ function tickHome() {
 $('play').addEventListener('click', e => {
   if (play.mode !== 'home') return;
   const nav = e.target.closest('.hm-nav button[data-sec]');
-  if (nav) return homeSec(nav.dataset.sec);
+  if (nav) return nav.dataset.sec !== homeNow && canMorph() ? startMorph(nav.dataset.sec) : homeSec(nav.dataset.sec);
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const act = b.dataset.act;
@@ -4351,9 +4664,6 @@ function colorFor(name) {
   return `hsl(${parseInt(hash(name), 36) % 360} 24% 34%)`;
 }
 
-// 起動したらトップを出す（URL に #viewer を付けたときはビューアから）
-if (!/^#viewer\b/.test(location.hash)) showHome();
-else bootDone();
 // フォント（トップの見出しと本文）を待つ。つながらないときは待ちすぎない
 {
   const css = $('zkCss');
@@ -4363,8 +4673,11 @@ else bootDone();
     new Promise(r => setTimeout(r, navigator.onLine === false ? 0 : 1500)),
   ]).catch(() => {}).then(() => { boot.fonts = true; bootCheck(); });
 }
-// 再生を WebGPU で描く準備（トップの描画とフォントを頼んだ後に。止まる分は読み込み中の表示の間に済ませる）
+// WebGPU の準備（フォントを頼んだ後に。止まる分は読み込み中の表示の間に済ませる）。
+// 起動したらトップを出す（URL に #viewer を付けたときはビューアから）。トップも WebGPU で描けるよう、準備を 3 秒まで待ってから出す（間に合わなければトップは WebGL2）
 startGpu();
+if (/^#viewer\b/.test(location.hash)) bootDone();
+else Promise.race([gpuReady, new Promise(r => setTimeout(r, 3000))]).then(() => { boot.stage = true; showHome(); });
 })();
 </script>
 </body>
