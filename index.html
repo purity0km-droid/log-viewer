@@ -187,10 +187,11 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 /* 再生（立ち絵つきで 1 件ずつ流す）。.pl-ui の中身は、HTML-in-Canvas が使えるときは canvas の中へ移して描く */
 html.playing{overflow:hidden}
 .play{position:fixed;inset:0;z-index:40;overflow:hidden;background:#0b0b0d;color:#fff;font-size:calc(17px * var(--scale));user-select:none;-webkit-user-select:none;--pl-c:#644ed7;--pl-ink:#fff;--hud-font:"Overused Grotesk","Bahnschrift",system-ui,sans-serif}
-#stage{position:absolute;inset:0;display:block;width:100%;height:100%}
+#stage,#stageGpu{position:absolute;inset:0;display:block;width:100%;height:100%}
+#stage[hidden],#stageGpu[hidden]{display:none}
 .pl-ui{position:absolute;inset:0;pointer-events:none}
 .pl-ui>*{position:absolute;left:0;top:0}
-#stage>*{position:absolute;left:0;top:0}  /* HTML-in-Canvas で canvas に移した部品（当たり判定は描いた位置に合わせる） */
+#stage>*,#stageGpu>*{position:absolute;left:0;top:0}  /* HTML-in-Canvas で canvas に移した部品（当たり判定は描いた位置に合わせる） */
 .pl-hud{width:calc(100vw - 48px);color:#e8e7ea;font-family:var(--hud-font)}
 .pl-hud-row{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
 .pl-lbl{font-size:10px;line-height:1.5;letter-spacing:.2em;color:#8d8c93}
@@ -237,6 +238,9 @@ html.playing{overflow:hidden}
 .pl-nar{width:min(720px,calc(100vw - 40px));height:64vh}
 .pl-nar-mask{height:100%;overflow:hidden;-webkit-mask-image:linear-gradient(transparent,#000 24%,#000 78%,transparent);mask-image:linear-gradient(transparent,#000 24%,#000 78%,transparent)}
 .pl-nar-list{position:relative;padding:32vh 0;color:#e6e5ea;font-size:1.04em;line-height:2;text-shadow:0 1px 10px rgba(0,0,0,.9),0 0 2px rgba(0,0,0,.8)}
+/* WebGPU と HTML-in-Canvas（data-mask）: 地の文の列は全体を 1 枚に写し、窓の位置と上下のぼかしはシェーダーで付ける（流すたびに写し直さない） */
+.play[data-mask] .pl-nar{height:auto}
+.play[data-mask] .pl-nar-mask{height:auto;overflow:visible;-webkit-mask-image:none;mask-image:none}
 .pl-np{margin-bottom:1.6em}
 .pl-np>*{margin:0}
 .pl-np>*+*{margin-top:.7em}
@@ -264,8 +268,9 @@ html.playing{overflow:hidden}
 .play[data-theme="light"] .pl-bar{background:rgba(0,0,0,.12)}
 .play[data-theme="light"] .pl-name-big{color:rgba(0,0,0,.05);-webkit-text-stroke-color:rgba(0,0,0,.55)}
 .play[data-theme="light"] .pl-name-big small{color:#44444a}
-.play[data-theme="light"] .pl-nar-list{color:#1c1c20;text-shadow:0 1px 10px rgba(255,255,255,.95),0 0 2px rgba(255,255,255,.9)}
-.play[data-theme="light"] .pl-np i{color:#55555c}
+/* 明るい表示の地の文は 400（明るい地に濃い文字は細く見え、350 では色を黒に近づけても薄かった。2026-10-29 ユーザーが見本から選んだ） */
+.play[data-theme="light"] .pl-nar-list{font-weight:400;color:#1c1c20;text-shadow:0 1px 10px rgba(255,255,255,.95),0 0 2px rgba(255,255,255,.9)}
+.play[data-theme="light"] .pl-np i{color:#16161a}  /* 地の文は本文ごとト書き（i）なので、淡い色だと全体が読みにくかった（2026-10-29 ユーザー） */
 .play[data-theme="light"] .pl-panel.info .pl-bubble{background:rgba(255,255,255,.76);color:#2a2a30;box-shadow:inset 0 0 0 1px #b9b9c0}
 .play[data-theme="light"] .pl-ctrl{background:rgba(255,255,255,.84);border-color:rgba(0,0,0,.12);color:#16161a}
 .play[data-theme="light"] .pl-ctrl button:hover{background:rgba(0,0,0,.06)}
@@ -618,6 +623,7 @@ html.busy-on{overflow:hidden}
 
 <section id="play" class="play" hidden aria-label="再生">
   <canvas id="stage"></canvas>
+  <canvas id="stageGpu" hidden></canvas>  <!-- 再生を WebGPU で描くとき（トップは #stage の WebGL2） -->
   <div class="pl-ui" id="plUi">
     <div class="hm-deco" id="hmDeco" inert><span class="hm-no" id="hmNo">01</span><span class="hm-kanji" id="hmKanji">使</span><span class="hm-en" id="hmEn">HOW TO USE</span></div>
     <div class="hm-chip" id="hmChip" inert><b id="hmChipName"></b><span id="hmChipText"></span></div>
@@ -1598,12 +1604,21 @@ const allLayers = () => play.mode === 'home' ? [...HOME_LAYERS.map(k => layers[k
 const slots = { L: { side: -1 }, R: { side: 1 } };
 
 // ---- 文字送り: 本文の文字を「出した分」と「まだの分（.rest）」に分け、まだの分は場所だけ取っておく（パネルの大きさが変わらない）
-let parts = [];
+// WebGPU と HTML-in-Canvas のとき（gpuReveal）は文字を分けずに全部出したまま写し、まだの分はシェーダーで隠す（revealMask）。
+// 1 字ごとに部品を写し直すと、1920×1080 で 1 割ほどのコマが落ちた（2026-10-28）
+let parts = [], caret = null;   // caret: まだ出していない最初の文字（gpuReveal のとき。{ t: 文字の節, a, b: UTF-16 の位置 }）
 function prepTyping(box) {
   parts = [];
-  const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), texts = [];
+  caret = null;
+  const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), texts = [], mask = gpuReveal();
   for (let n; (n = w.nextNode());) texts.push(n);
   for (const t of texts) {
+    if (mask) {
+      const chars = Array.from(t.data), at = new Uint32Array(chars.length + 1);
+      chars.forEach((c, i) => { at[i + 1] = at[i] + c.length; });
+      parts.push({ t, chars, at, n: -1 });
+      continue;
+    }
     const rest = document.createElement('span');
     rest.className = 'rest';
     t.after(rest);
@@ -1615,13 +1630,41 @@ function prepTyping(box) {
 let revealed = false;
 function reveal(k) {
   let at = null;
+  if (parts[0]?.at) caret = null;
   for (const p of parts) {
     const n = Math.max(0, Math.min(p.chars.length, k));
     k -= p.chars.length;
+    if (p.at) {  // gpuReveal: 文字はそのまま。まだの最初の文字の位置を、.rest の offsetTop と同じ基準で返す
+      if (n !== p.n) { p.n = n; revealed = true; }
+      if (!at && n < p.chars.length) {
+        caret = { t: p.t, a: p.at[n], b: p.at[n + 1] };
+        const ref = play.nar ? $('plNarList') : $('plText');
+        at = { offsetTop: caretRect().top - ref.getBoundingClientRect().top + (play.nar ? 0 : ref.offsetTop) };
+      }
+      continue;
+    }
     if (n !== p.n) { p.n = n; p.t.data = p.chars.slice(0, n).join(''); p.rest.textContent = p.chars.slice(n).join(''); revealed = true; }
     if (!at && n < p.chars.length) at = p.rest;
   }
   return at;
+}
+const caretRng = document.createRange();
+function caretRect() {
+  caretRng.setStart(caret.t, caret.a);
+  caretRng.setEnd(caret.t, caret.b);
+  return caretRng.getClientRects()[0] || caretRng.getBoundingClientRect();
+}
+// まだ出していない所を隠す範囲（テクスチャの中の 0〜1）を部品に渡す。文字送りの途中でなければ消す。
+// rv: この箱の中だけ隠す（吹き出しは本文の窓、地の文は列全体）。rc: [いまの行の上, 下, いまの文字の左, 隠した所に写す x（吹き出しの左の余白。-1 は透明）]
+// 行は文字の箱に行間の半分ずつを足した高さ（行間に、まだの文字の影が出ないように）
+function revealMask(L) {
+  L.rv = null;
+  if (!caret || !gpuReveal() || play.phase !== 'type' || SPEEDS[play.speed].all) return;
+  const er = L.el.getBoundingClientRect(), W = er.width, H = er.height;
+  if (!W || !H) return;
+  const c = caretRect(), box = (play.nar ? $('plNarList') : $('plScroll')).getBoundingClientRect(), lead = Math.max(0, (play.lineH - c.height) / 2);
+  L.rv = [(box.left - er.left) / W, (box.top - er.top) / H, (box.right - er.left) / W, (box.bottom - er.top) / H];
+  L.rc = [(c.top - lead - er.top) / H, (c.bottom + lead - er.top) / H, (c.left - er.left) / W, play.nar ? -1 : (box.left - er.left - 11) / W];
 }
 
 // ---- 進め方
@@ -1629,6 +1672,7 @@ function reveal(k) {
 function go(i, instant = false) {
   i = Math.max(0, Math.min(items.length - 1, i));
   const it = items[i], nar = isNarration(it), info = it.kind === 'info', plain = nar || info, tok = ++play.tok;
+  if (!instant && !play.paused && i !== play.i) panelDust();  // WebGPU: 前の吹き出しを粒にして流す
   play.i = i;
   const [l, r] = sidesAt(i);
   setSlot(slots.L, l);
@@ -1716,7 +1760,9 @@ function narPara(i) {
   }
   const p = el(i);
   list.append(p);
-  while (list.children.length > 8) {
+  // gpuReveal では列全体を 1 枚のテクスチャに写すので、テクスチャの大きさの上限を超えそうなら、窓より上に出た段落から消す
+  const cv = $('stageGpu'), d = cv.width / Math.max(1, cv.clientWidth), lim = gpuReveal() ? gpu.maxTex / d - 64 : Infinity;
+  while (list.children.length > 8 || (list.children.length > 1 && list.offsetHeight > lim && list.children[1].offsetTop <= play.narScroll)) {
     play.narScroll -= list.children[1].offsetTop - list.children[0].offsetTop;
     list.firstElementChild.remove();
   }
@@ -1797,7 +1843,7 @@ function frame(now) {
   if (rec) $('plRecTime').textContent = clock((now - rec.t0) / 1000);
   if (play.mode === 'home') { tickHome(); stepHome(now); }
   layout();
-  if (hic) $('stage').requestPaint(); else render(now / 1000);
+  if (hic) stageCv().requestPaint(); else render(now / 1000);
   play.raf = requestAnimationFrame(frame);
 }
 // 再生を始めてから 3 秒のようすをコンソールに出す（最初の文字が出るまでの時間・コマ数・いちばん長いコマ）。遅いと言われたときの手がかり
@@ -1807,7 +1853,7 @@ function perfTick(now, gap) {
   f.max = Math.max(f.max, gap);
   if (!f.first && play.mode === 'play' && Math.floor(play.typed) >= 1) f.first = now - f.t0;
   if (now - f.t0 < 3000) return;
-  console.info(`[Talklog Viewer] 再生: 最初の文字まで ${Math.round(f.first)}ms、最初の 3 秒で ${f.n} コマ（いちばん長いコマ ${Math.round(f.max)}ms）、${hic ? 'HTML-IN-CANVAS' : 'OVERLAY'}`);
+  console.info(`[Talklog Viewer] 再生: 最初の文字まで ${Math.round(f.first)}ms、最初の 3 秒で ${f.n} コマ（いちばん長いコマ ${Math.round(f.max)}ms）、${gpu?.ctx ? 'WEBGPU' : 'WEBGL2'} · ${hic ? 'HTML-IN-CANVAS' : 'OVERLAY'}`);
   play.perf = null;
 }
 function step(dt) {
@@ -1841,19 +1887,23 @@ function step(dt) {
     else { play.paused = true; syncCtrl(); stopRec(); toast('最後まで再生しました', 2500); }
   }
   revealed = false;
-  const at = reveal(Math.floor(play.typed));
-  if (revealed) touch(play.nar ? layers.nar : layers.panel);
+  const at = reveal(Math.floor(play.typed)), mask = gpuReveal();
+  if (revealed && !mask) touch(play.nar ? layers.nar : layers.panel);
   if (play.nar) {
-    // 地の文: いま出しているところが列の 6 割の高さに来るように、列ごと上へ流す
-    const list = $('plNarList'), cur = list.lastElementChild;
+    // 地の文: いま出しているところが列の 6 割の高さに来るように、列ごと上へ流す。
+    // gpuReveal のときは列を動かさず、写した列のどこを窓に出すか（scroll・win）をシェーダーに渡す
+    const list = $('plNarList'), cur = list.lastElementChild, win = mask ? narWin() : $('plNar').clientHeight;
     const y = at ? at.offsetTop + play.lineH : cur.offsetTop + cur.offsetHeight;
-    const want = Math.max(0, y - $('plNar').clientHeight * .6);
+    const want = Math.max(0, y - win * .6);
     play.narScroll = play.narSnap ? want : play.narScroll + (want - play.narScroll) * ease(5);
     play.narSnap = false;
+    layers.panel.rv = null;
+    if (mask) { Object.assign(layers.nar, { scroll: play.narScroll, win }); revealMask(layers.nar); return; }
     const tf = `translateY(${(-play.narScroll).toFixed(1)}px)`;
     if (list.style.transform !== tf) { list.style.transform = tf; touch(layers.nar); }
     return;
   }
+  layers.nar.rv = null;
   // 吹き出し: 出したところが下に隠れないように、本文を送る（本文の箱は position を持たないので、本文の上の端からの位置にする）
   const sc = $('plScroll'), max = sc.scrollHeight - sc.clientHeight;
   if (max > 0) {
@@ -1861,7 +1911,10 @@ function step(dt) {
     play.scroll += (want - play.scroll) * ease(8);
     if (Math.abs(sc.scrollTop - play.scroll) >= 1) { sc.scrollTop = play.scroll; touch(layers.panel); }
   }
+  revealMask(layers.panel);  // 送った後の位置で
 }
+// 地の文の窓の高さ（CSS の .pl-nar の 64vh）
+const narWin = () => innerHeight * .64;
 // HTML の部品の置き場所（CSS の px）。重ねる方式では、ここで translate と透明度も当てる
 // 吹き出しは話している人の側の端に寄せ、そちらから入ってくる。大きな名前は話している人の立ち絵に半分ほど重ねる
 function layout() {
@@ -1991,11 +2044,12 @@ function setSlot(s, name) {
   if (name === s.name) return;
   s.name = name;
   const tok = ++s.tok;
-  (name ? texFor(name) : Promise.resolve(null)).then(t => {
+  (name ? texFor(name, gpu?.ctx ? 1 : 0) : Promise.resolve(null)).then(t => {
     if (tok !== s.tok || t === s.cur) return;
     s.from = s.cur;
     s.cur = t;
     s.p = 0;
+    s.dust = !!s.from;  // WebGPU では入れ替わる前の絵から粒を散らす（gpuRender）
   });
 }
 // 画面の中の位置（canvas の画素）。cut = 切り抜き（下にそろえて大きく）、card = 四角い画像、round = アイコン
@@ -2220,8 +2274,9 @@ function stepLook(dt) {
 
 // ---- WebGL
 let gl = null, hic = false, P = null, bgFbo = null, bgTex = null, bgW = 0, bgH = 0;
-const allTex = new Set(), iconTex = new Map();
-let recTex = new WeakMap();
+// 立ち絵・アイコンのテクスチャは、描く方ごとに [WebGL2, WebGPU] で分けて持つ（トップの紋章は WebGL2、再生は WebGPU のことがある）
+const allTex = new Set(), iconTex = [new Map(), new Map()];
+let recTex = [new WeakMap(), new WeakMap()];
 
 const NOISE = `
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -2530,13 +2585,15 @@ function newTex() {
 
 // HTML-in-Canvas は版ごとに名前が変わっている途中なので、新旧どちらでも動くように見る（公式サンプルと同じ考え方）。
 // Chrome 155 から: content="drawable"・texElementSubImage2D（先に texImage2D で場所を取る）。それより前: layoutsubtree・texElementImage2D
-let hicWhy = '';
+let hicWhy = '', hicGpu = false;  // hicGpu: WebGPU のテクスチャへも写せる（再生を WebGPU で描くのに要る）
 function hicSupport() {
-  const C = HTMLCanvasElement.prototype, G = typeof WebGL2RenderingContext === 'function' ? WebGL2RenderingContext.prototype : {};
+  const C = HTMLCanvasElement.prototype, G = typeof WebGL2RenderingContext === 'function' ? WebGL2RenderingContext.prototype : {}, Q = self.GPUQueue?.prototype || {};
   const has = {
     requestPaint: 'requestPaint' in C, content: 'content' in C, texElementSubImage2D: 'texElementSubImage2D' in G,
     texElementImage2D: 'texElementImage2D' in G, getElementImageDefaultSize: 'getElementImageDefaultSize' in C, captureElementImage: 'captureElementImage' in C,
+    drawElementImageToTexture: 'drawElementImageToTexture' in Q, copyElementImageToTexture: 'copyElementImageToTexture' in Q,
   };
+  hicGpu = has.drawElementImageToTexture || has.copyElementImageToTexture;
   hicWhy = /[?&]nohic\b/.test(location.search) ? '?NOHIC'
     : !has.requestPaint ? 'NO PAINT API'
     : !has.texElementSubImage2D && !has.texElementImage2D ? 'NO WEBGL UPLOAD API' : '';
@@ -2566,10 +2623,17 @@ function initGL() {
   }
   for (const L of [...Object.values(layers), ...hparts]) Object.assign(L, { tex: newTex(), tw: 0, th: 0, ok: false });
   showMode();
-  // canvas の画素は画面の倍率に合わせる（2 倍まで。それ以上は重くなるだけなので抑える）
+  watchStage(cv);
+  return true;
+}
+
+// canvas の画素は画面の倍率に合わせる（2 倍まで。それ以上は重くなるだけなので抑える）。
+// 隠れている間（#stage は再生中、#stageGpu はトップ）は大きさを変えない（出し直した最初のコマから前の大きさで描ける）
+function watchStage(cv) {
   const ro = new ResizeObserver(([en]) => {
     const css = en.contentBoxSize?.[0], dev = en.devicePixelContentBoxSize?.[0];
     const cw = css ? css.inlineSize : cv.clientWidth, ch = css ? css.blockSize : cv.clientHeight;
+    if (!cw || !ch) return;
     const w = dev ? dev.inlineSize : Math.round(cw * devicePixelRatio), h = dev ? dev.blockSize : Math.round(ch * devicePixelRatio);
     const k = Math.min(1, 2 * cw / w || 1);
     cv.width = Math.max(1, Math.round(w * k));
@@ -2577,6 +2641,44 @@ function initGL() {
     play.needAll = true;
   });
   try { ro.observe(cv, { box: 'device-pixel-content-box' }); } catch { ro.observe(cv); }
+}
+// いま描いている canvas（再生を WebGPU で描いているときは #stageGpu）
+const stageCv = () => $(play.mode === 'play' && gpu?.ctx ? 'stageGpu' : 'stage');
+// 見せるのは描いている方の canvas だけ（WebGL2 が使えなくなったら #stage は出さない）
+function showStage(gp) {
+  $('stage').hidden = gp || !gl;
+  $('stageGpu').hidden = !gp;
+}
+
+// ---- 再生だけ WebGPU で描く
+// WebGPU の準備は起動したらすぐ（読み込み中の表示を出している間に）始め、トップはそれを待たない。再生を始めるときに、できていれば使う。
+// requestAdapter はメインスレッドを 0.5 秒ほど止める（1920×1080・UHD 770 のヘッドレスで 494ms。2026-10-29）。トップが出た後に始めると、そこでトップの動きが止まって見えた
+let gpuReady = null, gpuSettled = false;  // gpuSettled: 準備を終えた（使えなかったときも）
+function startGpu() {
+  if (gpuReady || !navigator.gpu || /[?&]gl/.test(location.search)) return;
+  gpuReady = gpuBoot().catch(e => console.warn('[Talklog Viewer] WebGPU を準備できませんでした', e)).then(() => { gpuSettled = true; showMode(); });
+}
+// 再生の部品を #stageGpu へ移し、WebGPU で描き始める。準備ができていない・HTML-in-Canvas の部品を WebGPU に写せないときは false（WebGL2 で描く）
+function initGpuStage() {
+  if (gpu?.ctx) return true;
+  if (!gpu?.ready || (hic && !hicGpu)) return false;
+  const cv = $('stageGpu'), ctx = cv.getContext('webgpu');
+  if (!ctx) { gpu = null; return false; }
+  gpu.ctx = ctx;
+  ctx.configure({ device: gpu.dev, format: gpu.fmt, alphaMode: 'opaque' });
+  if (hic) {
+    cv.setAttribute('content', 'drawable');
+    cv.setAttribute('layoutsubtree', '');
+    for (const k of PLAY_LAYERS) cv.append(layers[k].el);
+    cv.addEventListener('paint', onPaint);
+  }
+  for (const k of PLAY_LAYERS) {
+    const L = layers[k];
+    if (L.tex) gl.deleteTexture(L.tex);
+    Object.assign(L, { tex: null, tw: 0, th: 0, ok: false, gpu: true });
+  }
+  watchStage(cv);
+  showMode();
   return true;
 }
 
@@ -2587,13 +2689,21 @@ function touch(L) {
   L.force = true;
 }
 const touchAll = () => { for (const L of allLayers()) touch(L); };
+// 再生を WebGPU と HTML-in-Canvas で描くときは、文字送りと地の文の列を流すあいだ部品を写し直さない（prepTyping・revealMask・CSS の [data-mask]）
+const gpuReveal = () => hic && !!gpu?.ctx;
 
+// 再生を WebGPU で描けるときに足す説明（吹き出しが散るのは HTML-in-Canvas のときだけ）
+const gpuNote = () => `再生は WebGPU で描き、雨・雪・光の粒と、${hic ? '立ち絵や吹き出しが' : '立ち絵が'}入れ替わるときに散る粒を GPU で動かします。`;
 function showMode() {
+  const mode = hic ? 'HTML-IN-CANVAS' : 'OVERLAY' + (hicWhy ? ' · ' + hicWhy : ''), gp = !!gpu?.ready && (!hic || hicGpu);
   $('play').dataset.mode = hic ? 'hic' : 'overlay';
-  $('plMode').textContent = $('hmMode').textContent = hic ? 'HTML-IN-CANVAS' : 'OVERLAY' + (hicWhy ? ' · ' + hicWhy : '');
+  $('play').toggleAttribute('data-mask', gpuReveal());
+  $('hmMode').textContent = mode;
+  $('plMode').textContent = (gpu?.ctx ? 'WEBGPU · ' : 'WEBGL2 · ') + mode;
   $('hmSupport').textContent = !gl ? 'このブラウザでは WebGL2 が使えないため、再生モードは使えません。ビューアは使えます。'
-    : hic ? 'このブラウザでは HTML-in-Canvas が使えます。吹き出しや大きな文字にも効果がかかり、録画は canvas からそのまま撮ります。'
-    : 'このブラウザでは HTML-in-Canvas が使えないため、文字は canvas の上に重ねて表示します。録画は画面の共有で撮ります（許可を聞かれます）。Chrome では chrome://flags/#canvas-draw-element を有効にすると HTML-in-Canvas が使えます。';
+    : (hic ? 'このブラウザでは HTML-in-Canvas が使えます。吹き出しや大きな文字にも効果がかかり、録画は canvas からそのまま撮ります。'
+      : 'このブラウザでは HTML-in-Canvas が使えないため、文字は canvas の上に重ねて表示します。録画は画面の共有で撮ります（許可を聞かれます）。Chrome では chrome://flags/#canvas-draw-element を有効にすると HTML-in-Canvas が使えます。')
+    + (gp ? gpuNote() : '');
   touch(hpart('nav'));
 }
 // HTML-in-Canvas で描けなかったら（API が変わった・paint が来ないなど）、部品を canvas から出して重ねる方式に切り替える
@@ -2601,10 +2711,11 @@ function fallbackOverlay(why) {
   console.warn('HTML-in-Canvas をやめて重ねる方式にします:', why, layers.panel.err || '');
   hic = false;
   hicWhy = layers.panel.err ? 'UPLOAD FAILED' : !layers.panel.el.offsetWidth ? 'NO LAYOUT' : 'NO PAINT EVENT';  // NO LAYOUT = canvas の中の HTML に大きさが付かない
-  const cv = $('stage');
-  cv.removeEventListener('paint', onPaint);
-  cv.removeAttribute('content');
-  cv.removeAttribute('layoutsubtree');
+  for (const cv of [$('stage'), $('stageGpu')]) {
+    cv.removeEventListener('paint', onPaint);
+    cv.removeAttribute('content');
+    cv.removeAttribute('layoutsubtree');
+  }
   for (const L of Object.values(layers)) { L.el.removeAttribute('drawable'); $('plUi').append(L.el); }
   for (const P of hparts) if (!P.dom) partToDom(P);
   showMode();
@@ -2629,6 +2740,7 @@ function onPaint(e) {
   render(performance.now() / 1000);
 }
 function upLayer(L) {
+  if (L.gpu) return gpuUpLayer(L);
   try {
     if (!L.el.offsetWidth || !L.el.offsetHeight) return;
     for (let i = 0; i < 8 && gl.getError(); i++);  // 前に溜まっていたエラーを捨てる
@@ -2656,7 +2768,7 @@ function upLayer(L) {
 }
 // 部品を写すのに要るテクスチャの大きさ（canvas の画素）。新しい API が無ければ、CSS の大きさ × canvas の倍率で見積もる
 function elemSize(el) {
-  const cv = $('stage');
+  const cv = el.parentElement?.tagName === 'CANVAS' ? el.parentElement : $('stage');
   if (cv.getElementImageDefaultSize) { const s = cv.getElementImageDefaultSize(el); return [Math.ceil(s.width), Math.ceil(s.height)]; }
   if (cv.captureElementImage) {
     const im = cv.captureElementImage(el);
@@ -2666,33 +2778,34 @@ function elemSize(el) {
   return [Math.ceil(el.offsetWidth * d), Math.ceil(el.offsetHeight * d)];
 }
 
-// 立ち絵（無ければアイコン）のテクスチャ。同じ画像は使い回す
-async function texFor(name) {
+// 立ち絵（無ければアイコン）のテクスチャ。同じ画像は使い回す。g: 1 なら WebGPU（再生を #stageGpu に描くとき）
+async function texFor(name, g = 0) {
   const rec = await picFor(name).catch(() => null);
   if (rec) {
-    if (!recTex.has(rec)) {
-      recTex.set(rec, createImageBitmap(rec.blob).then(b => {
-        const t = imgTex(b, b.width, b.height, false);
+    if (!recTex[g].has(rec)) {
+      recTex[g].set(rec, createImageBitmap(rec.blob).then(b => {
+        const t = imgTex(b, b.width, b.height, false, g);
         b.close();
         return t && { ...t, kind: rec.cut ? 'cut' : 'card' };
       }).catch(() => null));
     }
-    return recTex.get(rec);
+    return recTex[g].get(rec);
   }
   const src = await avatarSrc(name);
   if (!src) return null;
-  if (!iconTex.has(src)) {
-    iconTex.set(src, (async () => {
+  if (!iconTex[g].has(src)) {
+    iconTex[g].set(src, (async () => {
       const im = new Image();
       im.src = src;
       await im.decode();
-      const t = imgTex(im, im.naturalWidth, im.naturalHeight, true);
+      const t = imgTex(im, im.naturalWidth, im.naturalHeight, true, g);
       return t && { ...t, kind: 'round' };
     })().catch(() => null));
   }
-  return iconTex.get(src);
+  return iconTex[g].get(src);
 }
-function imgTex(img, w, h, sq) {
+function imgTex(img, w, h, sq, g) {
+  if (g) return gpuImgTex(img, w, h, sq);
   const s = Math.min(w, h), cw = sq ? s : w, ch = sq ? s : h;
   const c = Object.assign(document.createElement('canvas'), { width: cw, height: ch });
   c.getContext('2d').drawImage(img, sq ? (w - s) / 2 : 0, sq ? (h - s) / 2 : 0, cw, ch, 0, 0, cw, ch);
@@ -2706,15 +2819,16 @@ function imgTex(img, w, h, sq) {
 }
 // アイコン・立ち絵を変えたら作り直す（次に再生したときに読み直す）
 function dropTextures() {
-  if (gl) allTex.forEach(t => gl.deleteTexture(t));
+  allTex.forEach(t => t.destroy ? t.destroy() : gl?.deleteTexture(t));  // WebGPU のテクスチャは destroy
   allTex.clear();
-  iconTex.clear();
-  recTex = new WeakMap();
+  iconTex.forEach(m => m.clear());
+  recTex = [new WeakMap(), new WeakMap()];
   Object.assign(emblem, { name: null, started: false, t: null });  // トップの紋章と主役の色も読み直す
   mainCol.name = '';
 }
 
 function render(time) {
+  if (play.mode === 'play' && gpu?.ctx) return gpuRender(time);
   if (!progsReady()) return;
   const cv = $('stage'), W = cv.width, H = cv.height, d = W / Math.max(1, cv.clientWidth), u = P.spr.u;
   if (bgW !== Math.ceil(W / 2) || bgH !== Math.ceil(H / 2)) {
@@ -2859,13 +2973,759 @@ function render(time) {
   if (hic) { layer(layers.nar); layer(layers.panel); layer(layers.hud); }
 }
 
+// ---- WebGPU（再生だけ。トップは上の WebGL2 で #stage に描く。URL に ?gl を付けると再生も WebGL2 で描く）
+// 1 枚の canvas は WebGL2 か WebGPU の片方しか持てないので、再生は別の canvas（#stageGpu）に描き、再生の部品（PLAY_LAYERS）をそちらへ移す（initGpuStage）。
+// 準備（gpuBoot）はトップを出した後に裏で始め、トップは WebGPU を待たない。再生を始めるときに準備ができていなければ、その回は WebGL2 で描く。
+// 絵は WebGL2 と同じものを WGSL で描き、そのうえで計算シェーダーで粒を動かす:
+//   天気（雨粒と地面での跳ね返り・雪）、漂う光の粒（話している人の円の飾りに沿って回る）、
+//   立ち絵が入れ替わるときに溶けた所から散る粒、次の発言へ移るときに前の吹き出しが粒になって流れる（HTML-in-Canvas のときだけ）。
+// 粒は 1 本のストレージバッファに [雨 | 雪 | 散る粒 | 光の粒] の順に並べ、毎フレーム計算シェーダーで動かして、そのまま頂点シェーダーで読む（CPU には戻さない）
+const NR = 12288, NS = 6144, ND = 49152, NM = 3072;
+const OS = NR, OD = NR + NS, OM = OD + ND, NP = OM + NM;
+const GU = self.GPUTextureUsage || {}, GB = self.GPUBufferUsage || {}, GS = self.GPUShaderStage || {};
+let gpu = null;  // { dev, fmt, ctx（#stageGpu を WebGPU で使い始めたら）, ready, … }
+
+const W_COMMON = `
+fn hash(p0: vec2f) -> f32 { var p = fract(p0 * vec2f(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+fn noise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let u = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2f(1., 0.)), u.x), mix(hash(i + vec2f(0., 1.)), hash(i + vec2f(1., 1.)), u.x), u.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var v = 0.; var a = .5; let m = mat2x2f(1.6, 1.2, -1.2, 1.6);
+  for (var i = 0; i < 5; i++) { v += a * noise(p); p = m * p; a *= .5; }
+  return v;
+}
+// GLSL の smoothstep は端を逆に渡しても（a > b でも）使えるので、同じ式を自分で書く
+fn ss(a: f32, b: f32, x: f32) -> f32 { let t = clamp((x - a) / (b - a), 0., 1.); return t * t * (3. - 2. * t); }
+fn sdBub(p: vec2f, b: vec2f, r: vec4f) -> f32 {
+  var rr = select(r.z, r.y, p.y < 0.);
+  if (p.x < 0.) { rr = select(r.w, r.x, p.y < 0.); }
+  let q = abs(p) - b + rr;
+  return min(max(q.x, q.y), 0.) + length(max(q, vec2f(0.))) - rr;
+}
+@vertex fn vsFull(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  return vec4f(p * 2. - 1., 0., 1.);
+}`;
+
+// 背景（FS_BG と同じ絵）。fc は WebGL と同じく左下を 0 にした位置
+const W_BG = W_COMMON + `
+struct BG { res: vec2f, time: f32, pulse: f32, tint: vec3f, marble: f32, accent: vec3f, neon: f32, amb: vec3f, bokehK: f32,
+  light: vec3f, city: f32, sky: vec3f, blind: f32, win: vec4f, tile: f32, tube: f32, floorK: f32, dim: f32,
+  winA: f32, rainWin: f32, lightMode: f32, pad: f32 }
+@group(0) @binding(0) var<uniform> B: BG;
+fn box(q: vec2f, e: f32) -> f32 { return ss(0., e, q.x) * ss(0., e, q.y) * ss(0., e, 1. - q.x) * ss(0., e, 1. - q.y); }
+fn bokeh(p: vec2f, t: f32) -> vec3f {
+  var acc = vec3f(0.);
+  for (var L = 0; L < 3; L++) {
+    let fl = f32(L); let s = 2.2 + fl * 1.8;
+    let q = p * s + vec2f(t * (.015 + .01 * fl), fl * 7.3); let id = floor(q); let f = fract(q);
+    for (var y = -1; y <= 1; y++) {
+      for (var x = -1; x <= 1; x++) {
+        let o2 = vec2f(f32(x), f32(y)); let c = id + o2;
+        let h = hash(c + fl * 13.1);
+        if (h < .6) { continue; }
+        let rad = .16 + .22 * hash(c + 5.3); let d = length(f - o2 - vec2f(hash(c + 3.7), hash(c + 9.1)));
+        let disc = ss(rad, rad * .85, d) * (.55 + .45 * ss(rad * .4, rad, d));
+        let hue = mix(B.light, vec3f(1., .82, .6), hash(c + 2.2) * .5);
+        acc += hue * disc * (.65 + .35 * sin(t * (.4 + h) + h * 40.)) * (.18 + .3 * hash(c + 1.1)) / (1. + fl * .6);
+      }
+    }
+  }
+  return acc;
+}
+fn town(p: vec2f, t: f32) -> f32 {
+  let q = p * vec2f(26., 18.); let id = floor(q); let f = fract(q) - .5;
+  let h = hash(id);
+  return step(.78, h) * (.6 + .4 * sin(t * (1. + h * 3.) + h * 30.)) * ss(.22, 0., length(f));
+}
+fn glassRain(q: vec2f, t: f32) -> f32 {
+  let x = q.x * 34.; let h = hash(vec2f(floor(x), 4.1));
+  let y = fract(q.y * 1.4 + t * (.25 + .35 * h) + h * 7.);
+  return (1. - ss(0., .18, abs(fract(x) - .5 - (h - .5) * .5))) * ss(0., .05, y) * ss(.45, .05, y) * step(.45, h);
+}
+@fragment fn fsBg(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let fc = vec2f(pos.x, B.res.y - pos.y);
+  let uv = fc / B.res; let p = fc / B.res.y * 1.5; let t = B.time * .03;
+  let mq = vec2f(fbm(p + vec2f(0., t)), fbm(p + vec2f(5.2, 1.3) - t));
+  let mr = vec2f(fbm(p + 3. * mq + vec2f(1.7, 9.2) + .7 * t), fbm(p + 3. * mq + vec2f(8.3, 2.8) - .5 * t));
+  let f = fbm(p + 3.4 * mr);
+  let vein = pow(1. - abs(sin((p.x * .9 + p.y * .5 + f * 5.) * 3.14159)), 22.);
+  var mar = mix(vec3f(.035, .034, .042), vec3f(.115, .11, .13), ss(.25, .9, f));
+  mar += mix(vec3f(.75), B.accent, .5) * vein * (.08 + .1 * ss(.3, .8, mr.x));
+  if (B.lightMode > .001) {
+    var lit = mix(vec3f(.84, .86, .86), vec3f(.97, .975, .975), ss(.2, .85, f));
+    lit -= vec3f(.3, .29, .32) * vein * (.5 + .5 * ss(.3, .8, mr.x));
+    lit *= mix(vec3f(1.), vec3f(.86, .97, .94), ss(.45, 1., mr.y) * .6);
+    mar = mix(mar, lit, B.lightMode);
+  }
+  var col = mar;
+  if (B.marble < .999) {
+    var st = B.amb * (.55 + .45 * ss(.15, .6, uv.y)) * (1. - .4 * ss(.8, 1., uv.y));
+    let floorK = ss(.24, .2, uv.y);
+    st = mix(st, B.amb * .45, floorK);
+    if (B.winA > .001) {
+      let q = (uv - B.win.xy) / B.win.zw;
+      let inside = box(q, .03) * B.winA;
+      if (inside > 0.) {
+        var sky = B.sky * (.7 + .5 * q.y);
+        sky += vec3f(1., .85, .6) * town(q * vec2f(B.win.z / B.win.w, 1.) * 1.6 + 3., B.time) * .8 * ss(.55, .1, q.y);
+        sky = sky * (1. - .25 * B.rainWin) + vec3f(.7, .8, .9) * glassRain(q, B.time) * B.rainWin * .35;
+        sky += (fbm(q * vec2f(3., 2.) + B.time * .01) - .5) * B.sky * .25;
+        let bar = max(1. - ss(0., .012, abs(q.x - .5)), 1. - ss(0., .015, abs(q.y - .55)));
+        st = mix(st, mix(sky, B.amb * .3, bar), inside);
+      }
+      st += B.sky * box((q - .5) * .55 + .5, .3) * (1. - inside) * B.winA * .18;
+    }
+    if (B.blind > .001) {
+      let s = step(.5, fract((uv.y + uv.x * .35) * 22.)) * ss(.15, .5, uv.x) * ss(.95, .6, uv.x) * ss(.2, .45, uv.y) * ss(.95, .7, uv.y);
+      st += B.light * s * B.blind * .12;
+    }
+    if (B.tile > .001) {
+      let g = abs(fract(p * 6.) - .5);
+      st = mix(st, st * .55, ss(.46, .5, max(g.x, g.y)) * B.tile * .8) + B.light * .03 * B.tile;
+    }
+    if (B.tube > .001) {
+      let d = abs(uv.y - .9);
+      st += B.light * B.tube * ((1. - ss(0., .012, d)) * ss(.35, .3, abs(uv.x - .5)) * 1.2 + exp(-d * 18.) * ss(.6, .2, abs(uv.x - .5)) * .25);
+    }
+    if (B.neon > .001) {
+      let fl = .85 + .15 * step(.08, hash(vec2f(floor(B.time * 9.), 1.)));
+      let h1 = abs(uv.y - .82) * B.res.y; let v1 = abs(uv.x - .09) * B.res.x; let v2 = abs(uv.x - .91) * B.res.x;
+      let seg = ss(.62, .58, abs(uv.x - .5)); let vseg = ss(0., .05, uv.y - .3) * ss(0., .05, .76 - uv.y);
+      let core = exp(-h1 / 1.6) * seg + (exp(-v1 / 1.6) + exp(-v2 / 1.6)) * vseg;
+      let halo = exp(-h1 / 40.) * seg + (exp(-v1 / 50.) + exp(-v2 / 50.)) * vseg;
+      st += (B.light * halo * .35 + mix(B.light, vec3f(1.), .55) * core) * B.neon * fl;
+    }
+    if (B.bokehK > .001) { st += bokeh(p, B.time) * B.bokehK; }
+    if (B.city > .001) { st += vec3f(1., .8, .55) * town(p * .9 + vec2f(B.time * .003, 0.), B.time) * B.city * ss(.65, .25, uv.y) * .7; }
+    if (B.floorK > .001) { st += B.light * floorK * (.5 + .5 * fbm(vec2f(p.x * 3., p.y * 18.) + B.time * .05)) * B.floorK * .18 * (B.neon * .7 + .3); }
+    st *= B.dim;
+    st = mix(st, sqrt(max(st, vec3f(0.))) * .85 + .14, B.lightMode);
+    col = mix(st, mar, B.marble);
+  }
+  let cloud = ss(.4, 1., mr.y + mq.x * .4) * (.2 + .14 * B.pulse) * mix(.35, 1., B.marble);
+  col += B.tint * cloud * (1. - B.lightMode);
+  col *= mix(vec3f(1.), mix(vec3f(1.), .4 + .7 * B.tint, cloud * 1.6), B.lightMode);
+  return vec4f(col, 1.);
+}`;
+
+// 仕上げ（FS_COMP の再生の分）: 背景を広げ、円の飾り・周辺の減光・走査線・粒子・稲光
+const W_COMP = W_COMMON + `
+struct CO { res: vec2f, time: f32, dpr: f32, ringA: vec4f, ringB: vec4f, ringCol: vec3f, flash: f32, lightMode: f32 }
+@group(0) @binding(0) var<uniform> C: CO;
+@group(0) @binding(1) var bgT: texture_2d<f32>;
+@group(0) @binding(2) var smp: sampler;
+fn line(d: f32, w: f32) -> f32 { return 1. - ss(0., w, abs(d)); }
+fn ring(p: vec2f, R: vec4f, dir: f32) -> f32 {
+  if (R.w <= 0.) { return 0.; }
+  let d = p - R.xy; let r = length(d); let a = atan2(d.y, d.x) / 6.28318 + .5; let w = 1.2 * C.dpr;
+  var v = line(r - R.z, w) * .45;
+  v += line(r - R.z * 1.1, w) * step(.5, fract(a * 36. + dir * C.time * .04)) * .3;
+  v += line(r - R.z * .9, w * 3.) * step(.82, fract(a * 120. - dir * C.time * .02)) * .55;
+  v += line(r - R.z * 1.24, w) * step(.75, fract(a * 3. + dir * C.time * .07)) * .5;
+  return v * R.w;
+}
+@fragment fn fsComp(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let p = pos.xy; let fc = vec2f(pos.x, C.res.y - pos.y); let uv = fc / C.res;
+  var col = textureSampleLevel(bgT, smp, pos.xy / C.res, 0.).rgb;  // 背景のテクスチャは上が 0 の向きで描いてある
+  col += C.ringCol * (ring(p, C.ringA, 1.) + ring(p, C.ringB, -1.));
+  col *= 1. - mix(.62, .16, C.lightMode) * ss(.3, .95, length((uv - .5) * vec2f(1., .9)));
+  col *= .985 + .015 * sin(fc.y * 3.14159 / C.dpr);
+  col += (hash(fc + fract(C.time * 7.) * 97.) - .5) * mix(.03, .02, C.lightMode);
+  col += vec3f(.85, .9, 1.) * C.flash * .55;
+  return vec4f(col, 1.);
+}`;
+
+// 画像（立ち絵・HTML の部品。FS_SPR と同じ）: 乗算済みアルファ。描くたびに変える値は動的オフセットで 1 本のバッファから読む。
+// rv・rc は文字送りの途中の部品で、まだ出していない所を隠す範囲（revealMask。テクスチャの中の 0〜1）。mask 4 は地の文の窓（上下をぼかす。CSS の .pl-nar-mask と同じ割合）
+const W_SPR = W_COMMON + `
+struct SP { rect: vec4f, crop: vec4f, rad: vec4f, res: vec2f, diss: vec2f, edge: vec3f, alpha: f32, sweepCol: vec3f, bright: f32,
+  sat: f32, glitch: f32, time: f32, dpr: f32, mask: f32, fadeB: f32, wrap: f32, sweep: f32, asp: f32, ang: f32, pa: f32, pb: f32, rv: vec4f, rc: vec4f }
+@group(0) @binding(0) var<uniform> S: SP;
+@group(0) @binding(1) var smp: sampler;
+@group(1) @binding(0) var tex: texture_2d<f32>;
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+@vertex fn vsQuad(@builtin(vertex_index) i: u32) -> VO {
+  let a = vec2f(f32(i & 1u), f32(i >> 1u));
+  let h = (a - .5) * S.rect.zw; let s = vec2f(sin(S.ang), cos(S.ang));
+  let p = S.rect.xy + S.rect.zw * .5 + vec2f(h.x * s.y - h.y * s.x, h.x * s.x + h.y * s.y);
+  var o: VO;
+  o.pos = vec4f(p.x / S.res.x * 2. - 1., 1. - p.y / S.res.y * 2., 0., 1.);
+  o.uv = a;
+  return o;
+}
+@fragment fn fsSpr(v: VO) -> @location(0) vec4f {
+  let vUv = v.uv;
+  var uv = S.crop.xy + vUv * S.crop.zw;
+  if (S.glitch > .001) {
+    let band = floor(uv.y * 26.) + floor(S.time * 30.) * 7.;
+    uv.x += (hash(vec2f(band, 3.1)) - .5) * S.glitch * .14 * step(.5, hash(vec2f(band, 7.7)));
+  }
+  let su = select(uv, vec2f(fract(uv.x), uv.y), S.wrap > .5);
+  var c = textureSample(tex, smp, su);
+  if (S.glitch > .001) {
+    let ca = S.glitch * .014;
+    c.r = textureSample(tex, smp, su + vec2f(ca, 0.)).r; c.b = textureSample(tex, smp, su - vec2f(ca, 0.)).b;
+  }
+  // 本文の箱の中で、いまの行より下と、いまの行のいまの文字から右を隠す（吹き出しは同じ高さの左の余白を写して塗る）
+  if (S.rv.z > S.rv.x) {
+    let fill = textureSampleLevel(tex, smp, vec2f(S.rc.w, su.y), 0.);
+    let inBox = su.x >= S.rv.x && su.x <= S.rv.z && su.y >= S.rv.y && su.y <= S.rv.w;
+    let shown = su.y < S.rc.x || (su.y < S.rc.y && su.x < S.rc.z);
+    if (inBox && !shown) { c = select(vec4f(0.), fill, S.rc.w >= 0.); }
+  }
+  if (S.wrap < .5) { c *= step(0., uv.x) * step(uv.x, 1.); }
+  var k = S.alpha;
+  if (S.mask > 3.5) { k *= clamp(vUv.y / .24, 0., 1.) * clamp((1. - vUv.y) / .22, 0., 1.); }
+  else if (S.mask > 2.5) { k *= 1. - ss(-.004, .002, sdBub((vUv - .5) * vec2f(S.asp, 1.), vec2f(S.asp, 1.) * .5, S.rad)); }
+  else if (S.mask > 1.5) { k *= 1. - ss(.485, .5, length(vUv - .5)); }
+  else if (S.mask > .5) { k *= ss(0., .06, vUv.x) * ss(0., .06, 1. - vUv.x) * ss(0., .06, vUv.y) * ss(0., .06, 1. - vUv.y); }
+  if (S.fadeB > 0.) { k *= ss(0., S.fadeB, 1. - vUv.y); }
+  c = vec4f(mix(vec3f(dot(c.rgb, vec3f(.299, .587, .114))), c.rgb, S.sat) * S.bright, c.a);
+  c *= k;
+  if (S.sweep > -1.) {
+    let d = uv.y - S.sweep; let s = exp(-d * d * 1400.) * .55 + step(d, 0.) * exp(d * 9.) * .07;
+    c = vec4f(mix(c.rgb, S.sweepCol * c.a, s), c.a);
+  }
+  if (S.diss.y != 0.) {
+    let n = fbm(vec2f(v.pos.x, S.res.y - v.pos.y) / (60. * S.dpr)); let th = mix(-.1, 1.1, S.diss.x);
+    let vis = select(ss(th - .03, th + .03, n), 1. - ss(th - .03, th + .03, n), S.diss.y > 0.);
+    let edge = select(0., (1. - ss(0., .045, abs(n - th))) * (1. - S.diss.x), S.diss.y > 0.);
+    c = c * vis + vec4f(S.edge, 1.) * edge * c.a;
+  }
+  return c;
+}`;
+
+// 霧・湯気（FS_FX の霧の部分。雨と雪は粒にした）
+const W_FOG = W_COMMON + `
+struct FG { res: vec2f, time: f32, dpr: f32, fogCol: vec3f, fog: f32, lightMode: f32, pa: f32, pb: f32, pc: f32 }
+@group(0) @binding(0) var<uniform> F: FG;
+@fragment fn fsFog(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let uv = vec2f(pos.x, F.res.y - pos.y) / F.res;
+  let k = fbm(uv * vec2f(2.5, 4.) + vec2f(F.time * .02, 0.)) * ss(1., .1, uv.y) * F.fog * .55;
+  return vec4f(F.fogCol * k, min(k * .6, 1.));
+}`;
+
+// 粒の形。位置・速さは canvas の画素。ex は種類ごとの値（雨: 奥行き・跳ねているか・地面の高さ、雪: 奥行き・揺れの位相、散る粒: 立ち絵か）。
+const W_PT = `
+struct Pt { pos: vec2f, vel: vec2f, col: vec4f, age: f32, life: f32, size: f32, seed: f32, ex: vec4f }
+const OS = ${OS}u; const OD = ${OD}u; const OM = ${OM}u; const NP = ${NP}u; const ND = ${ND}u;
+struct SIM { res: vec2f, time: f32, dt: f32, d: f32, rain: f32, snow: f32, lightMode: f32, frame: f32, motes: f32, pa: f32, pb: f32,
+  light: vec4f, tint: vec4f, ringA: vec4f, ringB: vec4f }
+var<private> rs: u32;
+fn rnd() -> f32 {
+  rs = rs * 747796405u + 2891336453u;
+  var w = ((rs >> ((rs >> 28u) + 4u)) ^ rs) * 277803737u;
+  w = (w >> 22u) ^ w;
+  return f32(w >> 8u) / 16777216.;
+}
+fn curl(p: vec2f) -> vec2f {
+  let e = .05;
+  return vec2f(noise(p + vec2f(0., e)) - noise(p - vec2f(0., e)), noise(p - vec2f(e, 0.)) - noise(p + vec2f(e, 0.))) / (2. * e);
+}`;
+
+const W_SIM = W_COMMON + W_PT + `
+@group(0) @binding(0) var<uniform> U: SIM;
+@group(0) @binding(1) var<storage, read_write> pts: array<Pt>;
+// 雨: 手前の粒ほど大きく速い。手前の粒は地面の高さで跳ね返りの輪になる
+fn newRain(p0: Pt, anywhere: bool) -> Pt {
+  var p = p0; let d = U.d;
+  let z = .25 + .75 * pow(rnd(), 1.5);
+  let vy = (950. + 450. * rnd()) * z * d;
+  p.vel = vec2f(vy * .2, vy);
+  let mg = U.res.y * .22;
+  p.pos = vec2f(rnd() * (U.res.x + mg) - mg, select(-rnd() * U.res.y * .35 - 60. * d, rnd() * U.res.y, anywhere));
+  p.ex = vec4f(z, 0., U.res.y * (.7 + .28 * z + .02 * rnd()), 0.);
+  p.seed = rnd(); p.age = 0.; p.life = 1.; p.size = (.5 + .9 * z) * d;
+  return p;
+}
+fn rain(p0: Pt) -> Pt {
+  var p = p0;
+  if (p.life == 0.) { return newRain(p, true); }
+  if (p.ex.y < .5) {
+    p.pos += p.vel * U.dt;
+    if (p.pos.y >= p.ex.z) {
+      if (p.ex.x > .55) { p.ex.y = 1.; p.age = 0.; p.life = .18 + .12 * rnd(); p.pos.y = p.ex.z; }
+      else { p = newRain(p, false); }
+    }
+  } else {
+    p.age += U.dt;
+    if (p.age >= p.life) { p = newRain(p, false); }
+  }
+  return p;
+}
+// 雪: 渦を巻く風（ノイズの回転）に流され、左右に揺れながら落ちる
+fn newSnow(p0: Pt, anywhere: bool) -> Pt {
+  var p = p0; let d = U.d;
+  let z = .2 + .8 * pow(rnd(), 1.4);
+  p.ex = vec4f(z, rnd() * 6.283, 0., 0.);
+  p.pos = vec2f(rnd() * U.res.x, select(-rnd() * U.res.y * .3 - 10. * d, rnd() * U.res.y, anywhere));
+  p.vel = vec2f(0., (22. + 60. * z) * d);
+  p.seed = rnd(); p.life = 1.; p.age = 0.; p.size = (.8 + 2.3 * z) * d;
+  return p;
+}
+fn snow(p0: Pt) -> Pt {
+  var p = p0;
+  if (p.life == 0.) { return newSnow(p, true); }
+  let d = U.d; let z = p.ex.x;
+  let wind = curl(p.pos / (260. * d) + vec2f(U.time * .04, 0.)) * 26. * z * d + vec2f(14. * d * z, 0.);
+  let sway = vec2f(sin(U.time * (.8 + p.seed) + p.ex.y) * 12. * z * d, 0.);
+  p.pos += (vec2f(0., p.vel.y) + wind + sway) * U.dt;
+  if (p.pos.y > U.res.y + p.size * 2.) { p = newSnow(p, false); }
+  if (p.pos.x > U.res.x + 20. * d) { p.pos.x -= U.res.x + 40. * d; }
+  if (p.pos.x < -20. * d) { p.pos.x += U.res.x + 40. * d; }
+  return p;
+}
+// 散る粒: 出た直後は age が負（その間は元の絵がまだ描かれている）。0 を過ぎたら渦に乗って流れる
+fn dust(p0: Pt) -> Pt {
+  var p = p0;
+  if (p.life <= 0.) { return p; }
+  p.age += U.dt;
+  if (p.age < 0.) { return p; }
+  if (p.age >= p.life) { p.life = 0.; return p; }
+  let d = U.d;
+  let up = select(-12., -48., p.ex.x > .5) * d;
+  p.vel += (curl(p.pos / (90. * d) + vec2f(U.time * .2, p.seed * 3.)) * 190. * d + vec2f(0., up)) * U.dt;
+  p.vel *= exp(-U.dt * 1.1);
+  p.pos += p.vel * U.dt;
+  return p;
+}
+// 光の粒: 話している人の円の飾りに寄って回る（4 割）か、漂う
+fn newMote(p0: Pt) -> Pt {
+  var p = p0; let d = U.d;
+  p.pos = vec2f(rnd(), rnd()) * U.res;
+  p.vel = vec2f(0.); p.seed = rnd(); p.age = 0.; p.life = 4. + 6. * rnd(); p.size = (.8 + 1.8 * rnd() * rnd()) * d;
+  return p;
+}
+fn ringPull(q: vec2f, R: vec4f) -> vec2f {
+  if (R.w <= 0.) { return vec2f(0.); }
+  let dv = q - R.xy; let r = length(dv) + 1e-3; let n = dv / r;
+  let k = R.w * ss(R.z * 1.55, R.z * 1.12, r);
+  return (vec2f(-n.y, n.x) * 40. * U.d - n * (r - R.z * 1.12) * 1.4) * k;
+}
+fn mote(p0: Pt) -> Pt {
+  var p = p0; let d = U.d;
+  if (p.life == 0.) { p = newMote(p); p.age = rnd() * p.life; return p; }
+  p.age += U.dt;
+  if (p.age >= p.life) { return newMote(p); }
+  var v = curl(p.pos / (180. * d) + vec2f(0., U.time * .03)) * 10. * d + vec2f(0., -5. * d);
+  v += (ringPull(p.pos, U.ringA) + ringPull(p.pos, U.ringB)) * step(p.seed, .4);  // 円に沿うのは 4 割だけ（残りは漂う）
+  p.vel += (v - p.vel) * (1. - exp(-U.dt * 3.));
+  p.pos += p.vel * U.dt;
+  return p;
+}
+@compute @workgroup_size(64) fn sim(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= NP) { return; }
+  rs = i * 9781u + u32(U.frame) * 6271u + 1u;
+  _ = rnd();
+  var p = pts[i];
+  if (i < OS) { p = rain(p); } else if (i < OD) { p = snow(p); } else if (i < OM) { p = dust(p); } else { p = mote(p); }
+  pts[i] = p;
+}`;
+
+// 散る粒を出す: 元の絵（立ち絵か、写し取った吹き出し）の色を拾って並べる。kind 0 = 立ち絵（FS_SPR の溶ける縁がその点を通るときに離れる）、1 = 吹き出し（吹き流す向きの先から順に）
+const W_SPAWN = W_COMMON + W_PT + `
+struct SPW { rect: vec4f, crop: vec4f, res: vec2f, d: f32, dir: f32, base: u32, count: u32, kind: u32, mask: u32 }
+@group(0) @binding(0) var<uniform> W: SPW;
+@group(0) @binding(1) var<storage, read_write> pts: array<Pt>;
+@group(0) @binding(2) var smp: sampler;
+@group(0) @binding(3) var src: texture_2d<f32>;
+@compute @workgroup_size(64) fn spawn(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= W.count) { return; }
+  rs = i * 7919u + W.base * 104729u + 17u;
+  _ = rnd();
+  let idx = OD + (W.base + i) % ND;
+  var p: Pt;
+  let uv = vec2f(rnd(), rnd());
+  let c = textureSampleLevel(src, smp, W.crop.xy + uv * W.crop.zw, 0.);
+  var a = c.a;
+  if (W.mask == 2u && length(uv - .5) > .48) { a = 0.; }
+  if (W.mask == 1u) { a *= ss(0., .06, uv.x) * ss(0., .06, 1. - uv.x) * ss(0., .06, uv.y) * ss(0., .06, 1. - uv.y); }
+  if (W.mask == 3u) { a *= ss(0., .16, 1. - uv.y); }
+  if (a < .2) { pts[idx] = p; return; }
+  let d = W.d;
+  p.pos = W.rect.xy + uv * W.rect.zw;
+  p.col = vec4f(c.rgb / max(c.a, 1e-3), a);
+  p.seed = rnd();
+  if (W.kind == 0u) {
+    let n = fbm(vec2f(p.pos.x, W.res.y - p.pos.y) / (60. * d));
+    p.age = -clamp((n + .1) / 1.2, 0., 1.) * .9;
+    p.vel = vec2f((rnd() - .5) * 90., -(20. + 60. * rnd())) * d;
+    p.life = .7 + .7 * rnd(); p.size = (1.1 + 1.4 * rnd()) * d; p.ex = vec4f(1., 0., 0., 0.);
+  } else {
+    p.age = -(select(uv.x, 1. - uv.x, W.dir > 0.) * .22 + rnd() * .04);
+    p.vel = vec2f(W.dir * (50. + 200. * rnd()), (rnd() - .65) * 150.) * d;
+    p.life = .55 + .45 * rnd(); p.size = (.9 + .9 * rnd()) * d; p.ex = vec4f(0.);
+  }
+  pts[idx] = p;
+}`;
+
+// 粒を描く: 1 粒 = 4 頂点の四角。雨は進む向きに伸ばした線、跳ね返りは平たい輪、雪と散る粒は丸、光の粒はにじんだ光。
+// 暗い表示では光を足す（乗算済みアルファの a を小さくすると加算に近づく）、明るい表示では暗い色で重ねる
+const W_PTD = W_COMMON + W_PT + `
+@group(0) @binding(0) var<uniform> U: SIM;
+@group(0) @binding(1) var<storage, read> pts: array<Pt>;
+const EDGE = vec3f(.78, .7, 1.);
+struct PO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) col: vec4f, @location(2) @interpolate(flat) kind: u32, @location(3) prm: vec4f }
+@vertex fn vsPt(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PO {
+  var o: PO;
+  o.pos = vec4f(2., 2., 0., 1.);  // 描かない粒は画面の外へ
+  let p = pts[ii];
+  let cr = vec2f(f32(vi & 1u), f32(vi >> 1u)) * 2. - 1.;
+  let d = U.d; let lm = U.lightMode;
+  var c = vec3f(0.); var a = 0.; var add = 0.; var hs = vec2f(0.); var ax = vec2f(0., 1.); var ctr = p.pos; var kind = 2u;
+  if (ii < OS) {
+    let vis = clamp((U.rain * .32 - p.seed) * 10., 0., 1.) * mix(.35, 1., ss(.1, .8, U.rain));
+    if (vis <= 0.) { return o; }
+    let z = p.ex.x;
+    c = mix(vec3f(.78, .84, .95), vec3f(.3, .35, .43), lm); add = .55 * (1. - lm);
+    if (p.ex.y < .5) {
+      kind = 0u; ax = normalize(p.vel);
+      let len = (14. + 34. * z) * d;
+      ctr = p.pos - ax * len * .5; hs = vec2f(p.size + d, len * .5);
+      a = vis * (.12 + .3 * z);
+    } else {
+      kind = 1u;
+      let t = p.age / p.life; let R = ((2. + 10. * z) * sqrt(t) + 1.) * d;
+      hs = vec2f(R + 1.5 * d, R * .35 + 1.5 * d); o.prm = vec4f(hs, R, d);
+      a = vis * (1. - t) * .5 * ss(.3, .8, U.rain);
+    }
+  } else if (ii < OD) {
+    let vis = clamp((U.snow * .5 - p.seed) * 6., 0., 1.) * mix(.4, 1., ss(.1, .8, U.snow));
+    if (vis <= 0.) { return o; }
+    hs = vec2f(p.size * 1.6);
+    c = mix(vec3f(1.), vec3f(.6, .66, .74), lm); a = vis * (.2 + .45 * p.ex.x); add = .2 * (1. - lm);
+  } else if (ii < OM) {
+    if (p.life <= 0. || p.age < 0.) { return o; }
+    let t = p.age / p.life; let glow = p.ex.x > .5;
+    hs = vec2f(p.size * (1. - .45 * t) * 1.6);
+    c = mix(p.col.rgb, mix(EDGE, U.tint.rgb, .3), ss(0., .55, t) * select(.35, .8, glow));
+    a = p.col.a * pow(1. - t, 1.4) * select(.9, 1., glow); add = select(.2, .7, glow) * (1. - lm);
+  } else {
+    if (U.motes <= 0. || p.life <= 0.) { return o; }
+    kind = 3u; hs = vec2f(p.size * 4.);
+    let t = clamp(p.age / p.life, 0., 1.);
+    let base = mix(U.light.rgb, U.tint.rgb, .45);
+    c = mix(base, base * .55, lm);
+    a = sin(3.14159 * t) * U.motes * (.55 + .45 * sin(U.time * (1.5 + 2. * p.seed) + p.seed * 40.)) * mix(.45, .3, lm); add = 1. - lm;
+  }
+  let pr = vec2f(-ax.y, ax.x);
+  let w = ctr + pr * cr.x * hs.x + ax * cr.y * hs.y;
+  o.pos = vec4f(w.x / U.res.x * 2. - 1., 1. - w.y / U.res.y * 2., 0., 1.);
+  o.uv = cr; o.kind = kind; o.col = vec4f(c * a, a * (1. - add));
+  return o;
+}
+@fragment fn fsPt(v: PO) -> @location(0) vec4f {
+  let r = length(v.uv);
+  var k = 0.;
+  if (v.kind == 0u) { k = (1. - ss(0., 1., abs(v.uv.x))) * ss(-1., .4, v.uv.y) * (1. - ss(.8, 1., v.uv.y)); }
+  else if (v.kind == 1u) { let q = v.uv * v.prm.xy; k = 1. - ss(0., 1.3 * v.prm.w, abs(length(vec2f(q.x, q.y / .35)) - v.prm.z)); }
+  else if (v.kind == 2u) { k = 1. - ss(.25, 1., r); }
+  else { k = exp(-r * r * 16.) + exp(-r * r * 3.) * .22; }
+  return v.col * k;
+}`;
+
+// 縮小した画像（ミップマップ）を作る: 1 段上を線形に縮めて描く
+const W_MIP = `
+@group(0) @binding(0) var smp: sampler;
+@group(0) @binding(1) var src: texture_2d<f32>;
+struct MO { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+@vertex fn vsMip(@builtin(vertex_index) i: u32) -> MO {
+  let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  var o: MO; o.pos = vec4f(p * 2. - 1., 0., 1.); o.uv = vec2f(p.x, 1. - p.y); return o;
+}
+@fragment fn fsMip(v: MO) -> @location(0) vec4f { return textureSampleLevel(src, smp, v.uv, 0.); }`;
+
+// アダプターとデバイスを取り、パイプラインを全部組み立てる（startGpu から。組み立てられなければ再生も WebGL2 で描く）。パイプラインは非同期で組み立てる（待つ間メインスレッドは止まらない）
+async function gpuBoot() {
+  if (!navigator.gpu || /[?&]gl\b/.test(location.search)) return;
+  const t0 = performance.now();
+  try {
+    const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!ad) return;
+    // テクスチャの大きさの上限は既定の 8192 ではなく、使える最大にする（地の文の列を 1 枚に写すので）
+    const dev = await ad.requestDevice({ requiredLimits: { maxTextureDimension2D: ad.limits.maxTextureDimension2D } });
+    gpu = { dev, fmt: navigator.gpu.getPreferredCanvasFormat(), ready: false, ctx: null, frame: 0, lastT: null, spawns: [], dustHead: 0, maxTex: dev.limits.maxTextureDimension2D };
+    dev.addEventListener('uncapturederror', e => console.error('[WebGPU]', e.error.message));
+    dev.lost.then(info => { if (info.reason !== 'destroyed') gpuFail(info.message); });
+    await gpuBuild();
+    console.info(`[Talklog Viewer] WebGPU: 準備に ${Math.round(performance.now() - t0)}ms（${ad.info?.vendor || ''} ${ad.info?.architecture || ''}）`);
+  } catch (e) {
+    if (gpu?.ctx) return gpuFail(e);
+    console.warn('[Talklog Viewer] WebGPU を使えないので WebGL2 で描きます', e);
+    gpu = null;
+  }
+}
+// #stageGpu を WebGPU で使い始めた後に描けなくなったら（デバイスを失ったなど）、?gl を付けて開き直す
+function gpuFail(err) {
+  console.error('[Talklog Viewer] WebGPU で描けなくなりました', err);
+  if (!gpu?.ctx) { gpu = null; return; }
+  const u = new URL(location.href);
+  u.searchParams.set('gl', '');
+  location.replace(u);
+}
+function gpuModule(code, label) {
+  const m = gpu.dev.createShaderModule({ code, label });
+  m.getCompilationInfo().then(info => info.messages.forEach(x => {
+    if (x.type === 'error') console.error(`[WebGPU] ${label} ${x.lineNum}:${x.linePos} ${x.message}`);
+  }));
+  return m;
+}
+const gpuBuf = size => gpu.dev.createBuffer({ size, usage: GB.UNIFORM | GB.COPY_DST });
+const gpuBind = (pipe, res) => gpu.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: res.map((resource, binding) => ({ binding, resource })) });
+const gpuWrap = tex => {
+  const view = tex.createView();
+  return { tex, view, bg: gpu.dev.createBindGroup({ layout: gpu.texBGL, entries: [{ binding: 0, resource: view }] }) };
+};
+async function gpuBuild() {
+  const g = gpu, dev = g.dev;
+  const premul = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
+  g.smp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
+  g.texBGL = dev.createBindGroupLayout({ entries: [{ binding: 0, visibility: GS.FRAGMENT, texture: {} }] });
+  const sprBGL = dev.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GS.VERTEX | GS.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 176 } },
+    { binding: 1, visibility: GS.FRAGMENT, sampler: {} },
+  ] });
+  const rpipe = (code, label, vs, fs, format, o = {}) => {
+    const module = gpuModule(code, label);
+    return dev.createRenderPipelineAsync({
+      label, layout: o.layout || 'auto', vertex: { module, entryPoint: vs },
+      fragment: { module, entryPoint: fs, targets: [{ format, ...(o.blend ? { blend: premul } : {}) }] },
+      primitive: { topology: o.strip ? 'triangle-strip' : 'triangle-list' },
+    });
+  };
+  const compute = (code, label, entryPoint) => dev.createComputePipelineAsync({ label, layout: 'auto', compute: { module: gpuModule(code, label), entryPoint } });
+  [g.pBg, g.pComp, g.pSpr, g.pFog, g.pPt, g.pMip, g.pSim, g.pSpawn] = await Promise.all([
+    rpipe(W_BG, 'bg', 'vsFull', 'fsBg', 'rgba8unorm'),
+    rpipe(W_COMP, 'comp', 'vsFull', 'fsComp', g.fmt),
+    rpipe(W_SPR, 'spr', 'vsQuad', 'fsSpr', g.fmt, { blend: true, strip: true, layout: dev.createPipelineLayout({ bindGroupLayouts: [sprBGL, g.texBGL] }) }),
+    rpipe(W_FOG, 'fog', 'vsFull', 'fsFog', g.fmt, { blend: true }),
+    rpipe(W_PTD, 'pt', 'vsPt', 'fsPt', g.fmt, { blend: true, strip: true }),
+    rpipe(W_MIP, 'mip', 'vsMip', 'fsMip', 'rgba8unorm'),
+    compute(W_SIM, 'sim', 'sim'),
+    compute(W_SPAWN, 'spawn', 'spawn'),
+  ]);
+  g.uBg = gpuBuf(144); g.uComp = gpuBuf(80); g.uFog = gpuBuf(48); g.uSim = gpuBuf(112); g.uSpr = gpuBuf(256 * 64); g.uSpawn = gpuBuf(256 * 4);
+  g.fBg = new Float32Array(36); g.fComp = new Float32Array(20); g.fFog = new Float32Array(12); g.fSim = new Float32Array(28); g.fSpr = new Float32Array(64 * 64);
+  g.pts = dev.createBuffer({ size: NP * 64, usage: GB.STORAGE });
+  g.bgBG = gpuBind(g.pBg, [{ buffer: g.uBg }]);
+  g.fogBG = gpuBind(g.pFog, [{ buffer: g.uFog }]);
+  g.simBG = gpuBind(g.pSim, [{ buffer: g.uSim }, { buffer: g.pts }]);
+  g.ptBG = gpuBind(g.pPt, [{ buffer: g.uSim }, { buffer: g.pts }]);
+  g.sprBG = dev.createBindGroup({ layout: sprBGL, entries: [{ binding: 0, resource: { buffer: g.uSpr, size: 176 } }, { binding: 1, resource: g.smp }] });
+  g.ready = true;
+}
+
+// 画像のテクスチャ（imgTex の WebGPU 版）。縮小して描いても粗くならないよう、ミップマップも作る
+function gpuImgTex(img, w, h, sq) {
+  const s = Math.min(w, h), cw = sq ? s : w, ch = sq ? s : h;
+  const c = Object.assign(document.createElement('canvas'), { width: cw, height: ch });
+  c.getContext('2d').drawImage(img, sq ? (w - s) / 2 : 0, sq ? (h - s) / 2 : 0, cw, ch, 0, 0, cw, ch);
+  const g = gpu, tex = g.dev.createTexture({
+    size: [cw, ch], format: 'rgba8unorm', mipLevelCount: Math.floor(Math.log2(Math.max(cw, ch))) + 1,
+    usage: GU.TEXTURE_BINDING | GU.COPY_DST | GU.RENDER_ATTACHMENT,
+  });
+  try { g.dev.queue.copyExternalImageToTexture({ source: c }, { texture: tex, premultipliedAlpha: true }, [cw, ch]); }
+  catch { tex.destroy(); return null; }  // file:// で開いたときの avatars/ の画像などは canvas が汚染されて使えない
+  const enc = g.dev.createCommandEncoder();
+  for (let l = 1; l < tex.mipLevelCount; l++) {
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView({ baseMipLevel: l, mipLevelCount: 1 }), loadOp: 'clear', storeOp: 'store' }] });
+    pass.setPipeline(g.pMip);
+    pass.setBindGroup(0, gpuBind(g.pMip, [g.smp, tex.createView({ baseMipLevel: l - 1, mipLevelCount: 1 })]));
+    pass.draw(3);
+    pass.end();
+  }
+  g.dev.queue.submit([enc.finish()]);
+  allTex.add(tex);
+  return { tex: gpuWrap(tex), w: cw, h: ch };
+}
+
+// HTML の部品をテクスチャへ写す（upLayer の WebGPU 版）。大きさが変わったらテクスチャを作り直す
+function gpuUpLayer(L) {
+  try {
+    if (!L.el.offsetWidth || !L.el.offsetHeight) return;
+    const [w, h] = elemSize(L.el), dev = gpu.dev, q = dev.queue;
+    if (!L.tex || w !== L.tw || h !== L.th) {
+      L.tex?.tex.destroy();
+      L.tex = gpuWrap(dev.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GU.TEXTURE_BINDING | GU.COPY_DST | GU.COPY_SRC | GU.RENDER_ATTACHMENT }));
+      L.tw = w;
+      L.th = h;
+    }
+    const chk = (L.chk = (L.chk || 0) + 1) <= 3;  // 最初の何回かは、写せたかを確かめる（WebGPU のエラーは後から届く）
+    if (chk) dev.pushErrorScope('validation');
+    if (q.drawElementImageToTexture) q.drawElementImageToTexture({ source: L.el }, { texture: L.tex.tex, size: { width: w, height: h }, premultipliedAlpha: true });
+    else q.copyElementImageToTexture({ source: L.el }, { destination: { texture: L.tex.tex, premultipliedAlpha: true }, width: w, height: h });
+    if (chk) dev.popErrorScope().then(err => {
+      if (!err) return;
+      L.bad = true;
+      L.ok = false;
+      L.err = err.message;
+      console.warn('HTML-in-Canvas（WebGPU）: 写せませんでした', L.el.id, err.message);
+    });
+    if (!L.bad) L.ok = true;
+  } catch (err) {
+    L.err = String(err?.message || err);
+    if (!L.warned) { L.warned = true; console.warn('HTML-in-Canvas（WebGPU）: 写せませんでした', L.el.id, err); }
+  }
+}
+
+// 次の発言へ移る前に、いまの吹き出しの像を写し取って粒にする（HTML-in-Canvas の部品はもう GPU のテクスチャなので、写し取るだけでよい）
+function panelDust() {
+  const L = layers.panel, g = gpu;
+  if (!g?.ready || !g.ctx || !hic || !L.ok || !L.tex || L.alpha < .5 || play.nar || still() || g.spawns.some(s => s.src === g.ghost)) return;
+  if (!g.ghost || g.ghost.tex.width !== L.tw || g.ghost.tex.height !== L.th) {
+    g.ghost?.tex.destroy();
+    g.ghost = gpuWrap(g.dev.createTexture({ size: [L.tw, L.th], format: 'rgba8unorm', usage: GU.TEXTURE_BINDING | GU.COPY_DST }));
+  }
+  const enc = g.dev.createCommandEncoder();
+  enc.copyTextureToTexture({ texture: L.tex.tex }, { texture: g.ghost.tex }, [L.tw, L.th]);
+  g.dev.queue.submit([enc.finish()]);
+  const cv = $('stageGpu'), d = cv.width / Math.max(1, cv.clientWidth);
+  g.spawns.push({ src: g.ghost, rect: [L.x * d, L.y * d, L.w * d, L.h * d], kind: 1, dir: play.side < 0 ? -1 : 1, count: 9000 });
+}
+
+// render の WebGPU 版（再生だけ）。順番は WebGL2 と同じで、粒の計算と描く分が入る
+function gpuRender(time) {
+  const g = gpu;
+  if (!g.ready) return;
+  const dev = g.dev, q = dev.queue, cv = $('stageGpu'), W = cv.width, H = cv.height, d = W / Math.max(1, cv.clientWidth);
+  const dt = g.lastT == null ? 0 : Math.min(.05, Math.max(0, time - g.lastT));
+  g.lastT = time;
+  g.frame++;
+  const lk = play.lightK, calm = still();
+  const bw = Math.ceil(W / 2), bh = Math.ceil(H / 2);
+  // 背景は 1 コマおきに描く（前の絵を使い回す）。大理石も光もゆっくり動くので見た目は変わらず、
+  // 毎コマ描くと 1920×1080・UHD 770 で 1 割ほどのコマが落ちた（2026-10-28）。作り直した直後は必ず描く
+  let bgNow = g.frame % 2 === 0;
+  if (!g.bgTex || g.bgTex.width !== bw || g.bgTex.height !== bh) {
+    g.bgTex?.destroy();
+    g.bgTex = dev.createTexture({ size: [bw, bh], format: 'rgba8unorm', usage: GU.RENDER_ATTACHMENT | GU.TEXTURE_BINDING });
+    g.bgView = g.bgTex.createView();
+    g.compBG = gpuBind(g.pComp, [{ buffer: g.uComp }, g.bgView, g.smp]);
+    bgNow = true;
+  }
+  const ring = s => {
+    const t = s.cur || s.from, r = t && slotGeo(s, t, W, H, time);
+    return r ? [r.cx, r.cy, r.r, Math.max(0, s.act - .5) * 2] : [0, 0, 0, 0];
+  };
+  const rA = ring(slots.L), rB = ring(slots.R);
+  g.fBg.set([bw, bh, time, play.pulse, ...play.tint, look.marble, ...ACCENT.map(v => v / 255), look.neon, ...look.amb, look.bokeh,
+    ...look.light, look.city, ...look.sky, look.blind, ...look.win, look.tile, look.tube, look.floor, look.dim, look.winA, look.rainWin, lk, 0]);
+  const ringCol = play.tint.map((v, n) => .22 * (.55 + .45 * v) * (1 - lk) - [.3, .29, .32][n] * lk);
+  g.fComp.set([W, H, time, d, ...rA, ...rB, ...ringCol, play.flash, lk, 0, 0, 0]);
+  g.fSim.set([W, H, time, dt, d, look.rain, look.snow, lk, g.frame, calm ? .4 : 1, 0, 0, ...look.light, 0, ...play.tint, 0, ...rA, ...rB]);
+  g.fFog.set([W, H, time, d, ...look.fogCol, look.fog, lk, 0, 0, 0]);
+
+  const enc = dev.createCommandEncoder();
+  // 粒: 入れ替わりで散る粒を出してから（1 フレームに 4 つまで）、全部を 1 歩動かす
+  const cp = enc.beginComputePass();
+  cp.setPipeline(g.pSpawn);
+  g.spawns.splice(0, 4).forEach((s, k) => {
+    const ab = new ArrayBuffer(64), f = new Float32Array(ab), u = new Uint32Array(ab);
+    f.set(s.rect, 0);
+    f.set(s.crop || [0, 0, 1, 1], 4);
+    f.set([W, H, d, s.dir || 0], 8);
+    u.set([g.dustHead, s.count, s.kind, s.mask || 0], 12);
+    g.dustHead = (g.dustHead + s.count) % ND;
+    q.writeBuffer(g.uSpawn, k * 256, ab);
+    cp.setBindGroup(0, gpuBind(g.pSpawn, [{ buffer: g.uSpawn, offset: k * 256, size: 64 }, { buffer: g.pts }, g.smp, s.src.view]));
+    cp.dispatchWorkgroups(Math.ceil(s.count / 64));
+  });
+  cp.setPipeline(g.pSim);
+  cp.setBindGroup(0, g.simBG);
+  cp.dispatchWorkgroups(Math.ceil(NP / 64));
+  cp.end();
+
+  if (bgNow) {
+    const bp = enc.beginRenderPass({ colorAttachments: [{ view: g.bgView, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    bp.setPipeline(g.pBg);
+    bp.setBindGroup(0, g.bgBG);
+    bp.draw(3);
+    bp.end();
+  }
+
+  const pass = enc.beginRenderPass({ colorAttachments: [{ view: g.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+  pass.setPipeline(g.pComp);
+  pass.setBindGroup(0, g.compBG);
+  pass.draw(3);
+  g.nSpr = 0;
+  const sprite = (tex, r, o = {}) => {
+    if (!tex || g.nSpr >= 64) return;
+    const b = g.nSpr++ * 64, f = g.fSpr;
+    f.set(r, b);
+    f.set(o.crop || [0, 0, 1, 1], b + 4);
+    f.set(o.rad || [0, 0, 0, 0], b + 8);
+    f.set([W, H, o.p ?? 1, o.dir || 0, .78, .7, 1, o.alpha ?? 1, 0, 0, 0, o.bright ?? 1,
+      o.sat ?? 1, o.glitch || 0, time, d, o.mask || 0, o.fadeB || 0, o.wrap ? 1 : 0, o.sweep ?? -2, o.asp || 1, (o.ang || 0) + (o.spin || 0), 0, 0], b + 12);
+    f.set(o.rv || [0, 0, 0, 0], b + 36);
+    f.set(o.rc || [0, 0, 0, 0], b + 40);
+    pass.setPipeline(g.pSpr);
+    pass.setBindGroup(0, g.sprBG, [b * 4]);
+    pass.setBindGroup(1, tex.bg);
+    pass.draw(4);
+  };
+  const dots = (first, count) => { pass.setPipeline(g.pPt); pass.setBindGroup(0, g.ptBG); pass.draw(4, count, 0, first); };
+  const layer = L => {
+    if (!L.ok || L.alpha <= .002) return;
+    if (!L.win) return sprite(L.tex, [L.x * d, L.y * d, L.w * d, L.h * d], L);
+    // 地の文の列（gpuReveal）: 写した列のうち窓の分だけを、上下をぼかして出す
+    const h = Math.min(L.win, L.h);
+    sprite(L.tex, [L.x * d, L.y * d, L.w * d, h * d], { ...L, crop: [0, L.scroll / L.h, 1, h / L.h], mask: 4 });
+  };
+  const portrait = s => {
+    const one = (t, dir) => {
+      if (!t) return;
+      sprite(t.tex, slotGeo(s, t, W, H, time).rect, {
+        bright: .34 + .66 * s.act, sat: .3 + .7 * s.act, p: s.p, dir,
+        mask: t.kind === 'card' ? 1 : t.kind === 'round' ? 2 : 0, fadeB: t.kind === 'cut' ? .16 : 0,
+      });
+    };
+    if (s.p < 1) { one(s.from, -1); one(s.cur, 1); } else one(s.cur, 0);
+  };
+  dots(OM, NM);  // 光の粒（立ち絵の後ろ）
+  // 立ち絵が入れ替わったら、入れ替わる前の絵から散る粒を出す（溶け始めた位置で）
+  for (const s of [slots.L, slots.R]) {
+    if (!s.dust) continue;
+    s.dust = false;
+    if (s.from && !calm) {
+      const k = s.from.kind;
+      g.spawns.push({ src: s.from.tex, rect: slotGeo(s, s.from, W, H, time).rect, kind: 0, mask: k === 'round' ? 2 : k === 'card' ? 1 : 3, count: 12288 });
+    }
+  }
+  (slots.L.act <= slots.R.act ? [slots.L, slots.R] : [slots.R, slots.L]).forEach(portrait);
+  if (hic) layer(layers.name);
+  dots(0, OM);  // 雨・雪・散る粒（立ち絵の上、吹き出しの下）
+  if (look.fog > .003) { pass.setPipeline(g.pFog); pass.setBindGroup(0, g.fogBG); pass.draw(3); }
+  if (hic) { layer(layers.nar); layer(layers.panel); layer(layers.hud); }
+  pass.end();
+  q.writeBuffer(g.uBg, 0, g.fBg);
+  q.writeBuffer(g.uComp, 0, g.fComp);
+  q.writeBuffer(g.uSim, 0, g.fSim);
+  q.writeBuffer(g.uFog, 0, g.fFog);
+  if (g.nSpr) q.writeBuffer(g.uSpr, 0, g.fSpr, 0, g.nSpr * 64);
+  q.submit([enc.finish()]);
+}
+
 // ---- 始める・やめる・操作
 // from: 始める番号（省くとビューアで読んでいた位置）
 async function startPlay(from) {
-  if (!items.length || play.mode === 'play') return;
+  if (!items.length || play.mode === 'play' || play.starting) return;
   const tStart = performance.now();
   busy(null);  // 大きいログは、発言を入れ終えるのと場面の手がかりを探すのを待たずに始める（裏で続ける）
   if (!initGL()) { toast('このブラウザでは再生を使えません（WebGL2 が必要です）', 5000); return; }
+  // WebGPU の準備がまだなら少しだけ待つ（1 回だけ。長くかかるときは、できるまで WebGL2 で描く）
+  if (gpuReady && !gpuSettled && !play.gpuWaited) {
+    play.starting = play.gpuWaited = true;
+    busy('描画の準備をしています');
+    try { await Promise.race([gpuReady, new Promise(r => setTimeout(r, 3000))]); } catch {} finally { play.starting = false; }
+    busy(null);
+    if (play.mode === 'play') return;
+  }
+  const gp = initGpuStage();
   resetSlots();
   Object.assign(play, {
     back: play.mode === 'home' ? 'home' : 'viewer',
@@ -2881,6 +3741,7 @@ async function startPlay(from) {
   $('home').hidden = true;
   $('play').dataset.view = 'play';
   $('play').hidden = false;
+  showStage(gp);
   document.documentElement.classList.add('playing');
   syncCtrl();
   syncRec();
@@ -3028,7 +3889,7 @@ async function toggleRec() {
   if (typeof MediaRecorder !== 'function') return toast('このブラウザでは録画できません', 4000);
   let stream;
   try {
-    stream = hic ? $('stage').captureStream(30)
+    stream = hic ? stageCv().captureStream(30)
       : await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false, preferCurrentTab: true, selfBrowserSurface: 'include' });
   } catch (e) { console.warn(e); return toast('録画を始められませんでした', 4000); }
   const type = ['video/mp4;codecs=avc1.640028', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) || '';
@@ -3080,8 +3941,13 @@ function saveBlob(blob, name) {
 // 目次・見出し・日付・右の列のパネル（hparts）は、HTML-in-Canvas が使えるときは canvas に描き（置き場所 .hm-slot に合わせる）、
 // 使えないときは置き場所の中の HTML のまま。中央のページの本文とボタン（#home の .hm-main）はいつも canvas の上の HTML。
 // 起動するとまずここを出す（URL に #viewer を付けるとビューアから始める）。ログを開くとビューアへ（「再生」から選んだときは再生へ）
-const VERSION = '2.3';
+const VERSION = '2.4';
 const CHANGELOG = [  // [版, 日付, 変わったこと]。新しいものを上に足す
+  ['2.4', '2026-10-29', [
+    '再生: WebGPU が使えるブラウザでは WebGPU で描くように（トップと、WebGPU が使えないときの再生は今までどおり WebGL2）',
+    '再生（WebGPU）: 雨と雪が粒ごとに動き、光の粒が話している人の円の飾りに沿って回るように。立ち絵や吹き出しは入れ替わるときに粒になって散る（吹き出しは HTML-in-Canvas のときだけ）',
+    '再生: 明るい表示で、地の文の文字を濃く（読みにくかったため）',
+  ]],
   ['2.3', '2026-10-28', [
     'ビューア: 発言の多いログ（十数万件など）を速く開けるように。開いているあいだは進み具合を表示',
     'トップ・再生: 発言の多いログを開いていると、動きが重くなったのを修正',
@@ -3197,6 +4063,7 @@ function showHome(sec = homeNow) {
   const ok = initGL();
   if (play.mode === 'play') stopPlay();
   play.mode = 'home';
+  showStage(false);
   $('play').dataset.view = 'home';
   $('home').hidden = false;
   $('play').hidden = false;
@@ -3496,6 +4363,8 @@ else bootDone();
     new Promise(r => setTimeout(r, navigator.onLine === false ? 0 : 1500)),
   ]).catch(() => {}).then(() => { boot.fonts = true; bootCheck(); });
 }
+// 再生を WebGPU で描く準備（トップの描画とフォントを頼んだ後に。止まる分は読み込み中の表示の間に済ませる）
+startGpu();
 })();
 </script>
 </body>
